@@ -1,0 +1,44 @@
+[package]
+name = "mofaclaw-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Workspace dependencies
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+config = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+cron = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+path-clean = { workspace = true }
+readability = { workspace = true }
+html2md = { workspace = true }
+dotenvy = { workspace = true }
+regex = "1.11"
+which = "7.0"
+html-escape = "0.2"
+tempfile = "3.14"
+infer = "0.15"
+base64 = "0.22"
+
+# Telegram
+teloxide = { workspace = true }
+# MoFA framework sdk - using local path for testing
+mofa-sdk = { git = "https://github.com/mofa-org/mofa.git", branch = "feature/mofa-rs" }
+# mofa-sdk = {git = "https://github.com/mofa-org/mofa.git", branch = "feature/mofa-rs"}
+
+[dev-dependencies]
+tokio-test = "0.4"

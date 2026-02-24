@@ -302,17 +302,34 @@ impl SimpleTool for WebFetchTool {
     }
 }
 
+use std::sync::LazyLock;
+
+static LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]+)</a>"#).unwrap());
+static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<h([1-6])[^>]*>([^<]+)</h\1>").unwrap());
+static BOLD1_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<strong[^>]*>([^<]+)</strong>").unwrap());
+static BOLD2_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<b[^>]*>([^<]+)</b>").unwrap());
+static ITALIC1_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<em[^>]*>([^<]+)</em>").unwrap());
+static ITALIC2_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<i[^>]*>([^<]+)</i>").unwrap());
+static CODEBLOCK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<pre[^>]*><code[^>]*>([\s\S]+?)</code></pre>").unwrap());
+static INLINECODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<code[^>]*>([^<]+)</code>").unwrap());
+static LIST_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<li[^>]*>([^<]+)</li>").unwrap());
+static PARAGRAPH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"</(p|div|section|article)>").unwrap());
+static BREAK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<br\s*/?>").unwrap());
+static SCRIPT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<script[\s\S]*?</script>").unwrap());
+static STYLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<style[\s\S]*?</style>").unwrap());
+static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
+static WS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]+").unwrap());
+static NEWLINES_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
+
 /// Convert HTML to simplified markdown
 fn html_to_markdown(html: &str) -> String {
     let mut result = html.to_string();
 
     // Convert links first (before other processing)
-    let link_re = Regex::new(r#"<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]+)</a>"#).unwrap();
-    result = link_re.replace_all(&result, "[$2]($1)").to_string();
+    result = LINK_RE.replace_all(&result, "[$2]($1)").to_string();
 
     // Convert headings
-    let heading_re = Regex::new(r"<h([1-6])[^>]*>([^<]+)</h\1>").unwrap();
-    result = heading_re
+    result = HEADING_RE
         .replace_all(&result, |caps: &regex::Captures| {
             let level = caps.get(1).unwrap().as_str().parse::<usize>().unwrap_or(1);
             let text = caps.get(2).unwrap().as_str();
@@ -321,52 +338,25 @@ fn html_to_markdown(html: &str) -> String {
         .to_string();
 
     // Convert bold
-    result = Regex::new(r"<strong[^>]*>([^<]+)</strong>")
-        .unwrap()
-        .replace_all(&result, "**$1**")
-        .to_string();
-    result = Regex::new(r"<b[^>]*>([^<]+)</b>")
-        .unwrap()
-        .replace_all(&result, "**$1**")
-        .to_string();
+    result = BOLD1_RE.replace_all(&result, "**$1**").to_string();
+    result = BOLD2_RE.replace_all(&result, "**$1**").to_string();
 
     // Convert italic
-    result = Regex::new(r"<em[^>]*>([^<]+)</em>")
-        .unwrap()
-        .replace_all(&result, "_$1_")
-        .to_string();
-    result = Regex::new(r"<i[^>]*>([^<]+)</i>")
-        .unwrap()
-        .replace_all(&result, "_$1_")
-        .to_string();
+    result = ITALIC1_RE.replace_all(&result, "_$1_").to_string();
+    result = ITALIC2_RE.replace_all(&result, "_$1_").to_string();
 
     // Convert code blocks
-    result = Regex::new(r"<pre[^>]*><code[^>]*>([\s\S]+?)</code></pre>")
-        .unwrap()
-        .replace_all(&result, "```\n$1\n```")
-        .to_string();
+    result = CODEBLOCK_RE.replace_all(&result, "```\n$1\n```").to_string();
 
     // Convert inline code
-    result = Regex::new(r"<code[^>]*>([^<]+)</code>")
-        .unwrap()
-        .replace_all(&result, "`$1`")
-        .to_string();
+    result = INLINECODE_RE.replace_all(&result, "`$1`").to_string();
 
     // Convert lists
-    result = Regex::new(r"<li[^>]*>([^<]+)</li>")
-        .unwrap()
-        .replace_all(&result, "\n- $1")
-        .to_string();
+    result = LIST_RE.replace_all(&result, "\n- $1").to_string();
 
     // Convert paragraphs and line breaks
-    result = Regex::new(r"</(p|div|section|article)>")
-        .unwrap()
-        .replace_all(&result, "\n\n")
-        .to_string();
-    result = Regex::new(r"<br\s*/?>")
-        .unwrap()
-        .replace_all(&result, "\n")
-        .to_string();
+    result = PARAGRAPH_RE.replace_all(&result, "\n\n").to_string();
+    result = BREAK_RE.replace_all(&result, "\n").to_string();
 
     // Strip remaining tags
     result = strip_html_tags(&result);
@@ -378,15 +368,11 @@ fn html_to_markdown(html: &str) -> String {
 /// Strip all HTML tags
 fn strip_html_tags(html: &str) -> String {
     // Remove script and style tags first
-    let script_re = Regex::new(r"(?s)<script[\s\S]*?</script>").unwrap();
-    let html = script_re.replace_all(html, "");
-
-    let style_re = Regex::new(r"(?s)<style[\s\S]*?</style>").unwrap();
-    let html = style_re.replace_all(&html, "");
+    let html = SCRIPT_RE.replace_all(html, "");
+    let html = STYLE_RE.replace_all(&html, "");
 
     // Remove remaining tags
-    let tag_re = Regex::new(r"<[^>]+>").unwrap();
-    let result = tag_re.replace_all(&html, "");
+    let result = TAG_RE.replace_all(&html, "");
 
     // Decode HTML entities
     html_escape::decode_html_entities(&result).to_string()
@@ -394,11 +380,8 @@ fn strip_html_tags(html: &str) -> String {
 
 /// Normalize whitespace
 fn normalize_whitespace(text: &str) -> String {
-    let re = Regex::new(r"[ \t]+").unwrap();
-    let text = re.replace_all(text, " ");
-
-    let re = Regex::new(r"\n{3,}").unwrap();
-    re.replace_all(&text, "\n\n").trim().to_string()
+    let text = WS_RE.replace_all(text, " ");
+    NEWLINES_RE.replace_all(&text, "\n\n").trim().to_string()
 }
 
 #[cfg(test)]

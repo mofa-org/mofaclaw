@@ -307,12 +307,19 @@ impl SimpleTool for ListDirTool {
                 None => break,
             };
             let name = entry.file_name().to_string_lossy().to_string();
-            let entry_path = entry.path();
-            let prefix = if tokio::fs::metadata(&entry_path)
-                .await
-                .map(|m| m.is_dir())
-                .unwrap_or(false)
-            {
+            
+            // Fast path: use DirEntry::file_type which doesn't require an extra stat call on most platforms
+            let is_dir = if let Ok(file_type) = entry.file_type().await {
+                file_type.is_dir()
+            } else {
+                // Fallback to metadata if file_type fails
+                tokio::fs::metadata(entry.path())
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+            };
+
+            let prefix = if is_dir {
                 "📁 "
             } else {
                 "📄 "

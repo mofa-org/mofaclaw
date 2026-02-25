@@ -148,8 +148,7 @@ impl CronService {
         store
             .jobs
             .iter()
-            .filter(|j| j.enabled && j.state.next_run_at_ms.is_some())
-            .map(|j| j.state.next_run_at_ms.unwrap())
+            .filter_map(|j| if j.enabled { j.state.next_run_at_ms } else { None })
             .min()
     }
 

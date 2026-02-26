@@ -1595,6 +1595,10 @@ impl Channel for DiscordChannel {
                     workspace_memory_view(),
                     help(),
                 ],
+                prefix_options: poise::PrefixFrameworkOptions {
+                    prefix: None, // disable prefix commands - we only use slash commands
+                    ..Default::default()
+                },
                 ..Default::default()
             })
             .setup(move |ctx, _ready, framework| {

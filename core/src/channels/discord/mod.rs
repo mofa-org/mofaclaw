@@ -1464,8 +1464,8 @@ impl Channel for DiscordChannel {
                 }
 
                 let content = new_message.content.clone();
-                if content.is_empty() {
-                    debug!("empty message from {}", sender_id);
+                if content.trim().is_empty() {
+                    debug!("empty or whitespace-only message from {}", sender_id);
                     return;
                 }
 
@@ -1776,7 +1776,28 @@ impl Channel for DiscordChannel {
                                         debug!("sent message chunk {}/{} to discord channel {}", i + 1, chunks.len(), msg.chat_id);
                                     }
                                     Err(e) => {
-                                        error!("failed to send message chunk {}/{} to discord: {}", i + 1, chunks.len(), e);
+                                        // Check for specific HTTP error status codes in error message
+                                        let error_str = e.to_string();
+                                        let error_msg = if error_str.contains("401") || error_str.contains("Unauthorized") {
+                                            error!("discord authentication failed (401): token may be expired or invalid - {}", error_str);
+                                            "error: bot authentication failed. please check bot token."
+                                        } else if error_str.contains("403") || error_str.contains("Forbidden") {
+                                            error!("discord permission denied (403): bot lacks permissions in channel {} - {}", msg.chat_id, error_str);
+                                            "error: bot doesn't have permission to send messages in this channel."
+                                        } else if error_str.contains("404") || error_str.contains("Not Found") {
+                                            error!("discord channel not found (404): channel {} may have been deleted - {}", msg.chat_id, error_str);
+                                            "error: channel not found. it may have been deleted."
+                                        } else {
+                                            error!("failed to send message chunk {}/{} to discord: {}", i + 1, chunks.len(), e);
+                                            "error: failed to send message."
+                                        };
+                                        
+                                        // Try to send error message to user (if possible)
+                                        if i == 0 {
+                                            // Only try to send error on first chunk to avoid spam
+                                            let _ = channel_id.say(&*http, error_msg).await;
+                                        }
+                                        
                                         break; // Stop sending remaining chunks on error
                                     }
                                 }

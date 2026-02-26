@@ -1,11 +1,13 @@
 //! discord channel using serenity and poise
 
+pub mod components;
+
 use super::base::Channel;
 use crate::bus::MessageBus;
 use crate::config::DiscordConfig;
 use crate::error::{ChannelError, Result};
-use crate::messages::InboundMessage;
 use crate::get_workspace_path;
+use crate::messages::InboundMessage;
 use async_trait::async_trait;
 use poise::serenity_prelude as serenity;
 use std::sync::Arc;
@@ -99,13 +101,17 @@ impl DiscordChannel {
         if self.config.allow_from.contains(&user_id.to_string()) {
             return true;
         }
-        roles.iter().any(|role| self.config.allow_from.contains(role))
+        roles
+            .iter()
+            .any(|role| self.config.allow_from.contains(role))
     }
 
     /// check if user has admin role
     fn is_admin(&self, roles: &[String]) -> bool {
         !self.config.admin_roles.is_empty()
-            && roles.iter().any(|role| self.config.admin_roles.contains(role))
+            && roles
+                .iter()
+                .any(|role| self.config.admin_roles.contains(role))
     }
 
     /// check if user has member role (or admin role)
@@ -113,7 +119,9 @@ impl DiscordChannel {
         // members include both member_roles and admin_roles
         self.is_admin(roles)
             || (!self.config.member_roles.is_empty()
-                && roles.iter().any(|role| self.config.member_roles.contains(role)))
+                && roles
+                    .iter()
+                    .any(|role| self.config.member_roles.contains(role)))
     }
 
     /// check if user is guest (anyone can be a guest, but not restricted)
@@ -174,7 +182,8 @@ async fn issue(
         IssueAction::Create => {
             // Create requires Member permission
             if !channel.is_member(&roles) {
-                ctx.say("error: create operation requires member role").await?;
+                ctx.say("error: create operation requires member role")
+                    .await?;
                 return Ok(());
             }
             if let Some(t) = title {
@@ -191,7 +200,8 @@ async fn issue(
         IssueAction::List => {
             // List requires Guest permission (everyone can list)
             if !channel.is_guest(&roles) {
-                ctx.say("error: list operation requires guest permission").await?;
+                ctx.say("error: list operation requires guest permission")
+                    .await?;
                 return Ok(());
             }
             let mut req = "list all github issues".to_string();
@@ -203,7 +213,8 @@ async fn issue(
         IssueAction::View => {
             // View requires Guest permission (everyone can view)
             if !channel.is_guest(&roles) {
-                ctx.say("error: view operation requires guest permission").await?;
+                ctx.say("error: view operation requires guest permission")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -216,7 +227,8 @@ async fn issue(
         IssueAction::Close => {
             // Close requires Member permission
             if !channel.is_member(&roles) {
-                ctx.say("error: close operation requires member role").await?;
+                ctx.say("error: close operation requires member role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -229,7 +241,8 @@ async fn issue(
         IssueAction::Comment => {
             // Comment requires Member permission
             if !channel.is_member(&roles) {
-                ctx.say("error: comment operation requires member role").await?;
+                ctx.say("error: comment operation requires member role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -247,7 +260,8 @@ async fn issue(
         IssueAction::Assign => {
             // Assign requires Admin permission
             if !channel.is_admin(&roles) {
-                ctx.say("error: assign operation requires admin role").await?;
+                ctx.say("error: assign operation requires admin role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -256,9 +270,13 @@ async fn issue(
                         ctx.say("error: github username cannot be empty").await?;
                         return Ok(());
                     }
-                    format!("assign github issue #{} to github user: {}", n, github_username)
+                    format!(
+                        "assign github issue #{} to github user: {}",
+                        n, github_username
+                    )
                 } else {
-                    ctx.say("error: github username required for assign action").await?;
+                    ctx.say("error: github username required for assign action")
+                        .await?;
                     return Ok(());
                 }
             } else {
@@ -280,14 +298,15 @@ async fn issue(
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish issue command to bus: {}", e);
-        
+
         let error_embed = serenity::CreateEmbed::default()
             .title("Error")
             .description(format!("Failed to process issue request: {}", e))
             .color(0xED4245) // Discord red
             .timestamp(serenity::Timestamp::now());
-        
-        ctx.send(poise::CreateReply::default().embed(error_embed)).await?;
+
+        ctx.send(poise::CreateReply::default().embed(error_embed))
+            .await?;
     }
 
     Ok(())
@@ -321,7 +340,8 @@ async fn pr(
         PrAction::Create => {
             // Create requires Member permission
             if !channel.is_member(&roles) {
-                ctx.say("error: create operation requires member role").await?;
+                ctx.say("error: create operation requires member role")
+                    .await?;
                 return Ok(());
             }
             if let Some(t) = title {
@@ -341,7 +361,8 @@ async fn pr(
         PrAction::List => {
             // List requires Guest permission (everyone can list)
             if !channel.is_guest(&roles) {
-                ctx.say("error: list operation requires guest permission").await?;
+                ctx.say("error: list operation requires guest permission")
+                    .await?;
                 return Ok(());
             }
             let mut req = "list all pull requests".to_string();
@@ -353,7 +374,8 @@ async fn pr(
         PrAction::View => {
             // View requires Guest permission (everyone can view)
             if !channel.is_guest(&roles) {
-                ctx.say("error: view operation requires guest permission").await?;
+                ctx.say("error: view operation requires guest permission")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -366,12 +388,29 @@ async fn pr(
         PrAction::Merge => {
             // Merge requires Admin permission
             if !channel.is_admin(&roles) {
-                ctx.say("error: merge operation requires admin role").await?;
+                ctx.say("error: merge operation requires admin role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
+                // Interactive confirmation before destructive merge (closes #27)
+                let prompt = format!(
+                    "Merge PR #{n} into main? CI status will be checked first. This cannot be undone."
+                );
+                match components::confirm(&ctx, &prompt).await {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(()),
+                    Err(e) => {
+                        ctx.say(format!("error: confirmation failed: {}", e))
+                            .await?;
+                        return Ok(());
+                    }
+                }
                 // Check CI status before merge
-                format!("check ci status for pr #{} then merge pull request #{}", n, n)
+                format!(
+                    "check ci status for pr #{} then merge pull request #{}",
+                    n, n
+                )
             } else {
                 ctx.say("pr number required for merge action").await?;
                 return Ok(());
@@ -380,7 +419,8 @@ async fn pr(
         PrAction::Close => {
             // Close requires Member permission
             if !channel.is_member(&roles) {
-                ctx.say("error: close operation requires member role").await?;
+                ctx.say("error: close operation requires member role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -393,7 +433,8 @@ async fn pr(
         PrAction::Comment => {
             // Comment requires Member permission
             if !channel.is_member(&roles) {
-                ctx.say("error: comment operation requires member role").await?;
+                ctx.say("error: comment operation requires member role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -411,7 +452,8 @@ async fn pr(
         PrAction::Review => {
             // Review requires Member permission
             if !channel.is_member(&roles) {
-                ctx.say("error: review operation requires member role").await?;
+                ctx.say("error: review operation requires member role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -425,7 +467,8 @@ async fn pr(
                         }
                     }
                 } else {
-                    ctx.say("review action (approve/reject) required for review action").await?;
+                    ctx.say("review action (approve/reject) required for review action")
+                        .await?;
                     return Ok(());
                 }
             } else {
@@ -447,14 +490,15 @@ async fn pr(
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish pr command to bus: {}", e);
-        
+
         let error_embed = serenity::CreateEmbed::default()
             .title("Error")
             .description(format!("Failed to process pr request: {}", e))
             .color(0xED4245) // Discord red
             .timestamp(serenity::Timestamp::now());
-        
-        ctx.send(poise::CreateReply::default().embed(error_embed)).await?;
+
+        ctx.send(poise::CreateReply::default().embed(error_embed))
+            .await?;
     }
 
     Ok(())
@@ -485,7 +529,8 @@ async fn status(
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish status command to bus: {}", e);
-        ctx.say(format!("error: failed to check ci status: {}", e)).await?;
+        ctx.say(format!("error: failed to check ci status: {}", e))
+            .await?;
     }
 
     Ok(())
@@ -512,13 +557,41 @@ async fn release(
     let request = match action.as_deref() {
         Some("create") => {
             if !channel.is_admin(&roles) {
-                ctx.say("error: create release operation requires admin role").await?;
+                ctx.say("error: create release operation requires admin role")
+                    .await?;
                 return Ok(());
             }
             if let Some(v) = version {
                 format!("create a github release with version: {}", v)
             } else {
                 ctx.say("version required for create action").await?;
+                return Ok(());
+            }
+        }
+        Some("delete") => {
+            // Delete requires Admin + interactive confirmation (closes #27)
+            if !channel.is_admin(&roles) {
+                ctx.say("error: delete release operation requires admin role")
+                    .await?;
+                return Ok(());
+            }
+            if let Some(v) = &version {
+                let prompt = format!(
+                    "Delete release **{}**? This is irreversible and cannot be undone.",
+                    v
+                );
+                match components::confirm(&ctx, &prompt).await {
+                    Ok(true) => {}
+                    Ok(false) => return Ok(()),
+                    Err(e) => {
+                        ctx.say(format!("error: confirmation failed: {}", e))
+                            .await?;
+                        return Ok(());
+                    }
+                }
+                format!("delete github release: {}", v)
+            } else {
+                ctx.say("version required for delete action").await?;
                 return Ok(());
             }
         }
@@ -536,7 +609,8 @@ async fn release(
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish release command to bus: {}", e);
-        ctx.say(format!("error: failed to process release request: {}", e)).await?;
+        ctx.say(format!("error: failed to process release request: {}", e))
+            .await?;
     }
 
     Ok(())
@@ -567,7 +641,8 @@ async fn summarize(
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish summarize command to bus: {}", e);
-        ctx.say(format!("error: failed to summarize: {}", e)).await?;
+        ctx.say(format!("error: failed to summarize: {}", e))
+            .await?;
     }
 
     Ok(())
@@ -598,7 +673,9 @@ async fn weather(
 
     let request = format!(
         "use the weather skill to get weather for {}. use curl to call wttr.in: curl -s \"wttr.in/{}?{}\" --max-time 10",
-        location, location_encoded, format_param.trim_start_matches('?')
+        location,
+        location_encoded,
+        format_param.trim_start_matches('?')
     );
 
     ctx.say("fetching weather...").await?;
@@ -606,7 +683,8 @@ async fn weather(
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish weather command to bus: {}", e);
-        ctx.say(format!("error: failed to get weather: {}", e)).await?;
+        ctx.say(format!("error: failed to get weather: {}", e))
+            .await?;
     }
 
     Ok(())
@@ -664,7 +742,10 @@ async fn tmux(
         TmuxAction::Send => {
             if let Some(s) = session {
                 if let Some(c) = command {
-                    format!("use tmux skill to send command '{}' to tmux session: {}", c, s)
+                    format!(
+                        "use tmux skill to send command '{}' to tmux session: {}",
+                        c, s
+                    )
                 } else {
                     ctx.say("command required for send action").await?;
                     return Ok(());
@@ -689,7 +770,8 @@ async fn tmux(
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish tmux command to bus: {}", e);
-        ctx.say(format!("error: failed to process tmux request: {}", e)).await?;
+        ctx.say(format!("error: failed to process tmux request: {}", e))
+            .await?;
     }
 
     Ok(())
@@ -730,12 +812,16 @@ async fn skill(
     let request = match action {
         SkillAction::Create => {
             if !channel.is_admin(&roles) {
-                ctx.say("error: create skill operation requires admin role").await?;
+                ctx.say("error: create skill operation requires admin role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = name {
                 if let Some(d) = description {
-                    format!("use skill-creator to create a new skill named '{}' with description: {}", n, d)
+                    format!(
+                        "use skill-creator to create a new skill named '{}' with description: {}",
+                        n, d
+                    )
                 } else {
                     format!("use skill-creator to create a new skill named: {}", n)
                 }
@@ -746,7 +832,8 @@ async fn skill(
         }
         SkillAction::Update => {
             if !channel.is_admin(&roles) {
-                ctx.say("error: update skill operation requires admin role").await?;
+                ctx.say("error: update skill operation requires admin role")
+                    .await?;
                 return Ok(());
             }
             if let Some(n) = name {
@@ -772,7 +859,8 @@ async fn skill(
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish skill command to bus: {}", e);
-        ctx.say(format!("error: failed to process skill request: {}", e)).await?;
+        ctx.say(format!("error: failed to process skill request: {}", e))
+            .await?;
     }
 
     Ok(())
@@ -818,9 +906,12 @@ enum CommandIntent {
 /// match workspace keywords to intent
 fn match_workspace_keywords(content: &str) -> WorkspaceIntent {
     let lower = content.to_lowercase();
-    
+
     // workspace view file patterns
-    if lower.contains("show workspace") || lower.contains("view workspace") || lower.contains("workspace") {
+    if lower.contains("show workspace")
+        || lower.contains("view workspace")
+        || lower.contains("workspace")
+    {
         if lower.contains("soul") {
             return WorkspaceIntent::ViewFile(WorkspaceFile::Soul);
         }
@@ -837,44 +928,56 @@ fn match_workspace_keywords(content: &str) -> WorkspaceIntent {
             return WorkspaceIntent::ViewFile(WorkspaceFile::Heartbeat);
         }
     }
-    
+
     // heartbeat list patterns
-    if lower.contains("heartbeat") && (lower.contains("list") || lower.contains("task") || lower.contains("show")) {
+    if lower.contains("heartbeat")
+        && (lower.contains("list") || lower.contains("task") || lower.contains("show"))
+    {
         return WorkspaceIntent::HeartbeatList;
     }
-    
+
     // memory view patterns
     if lower.contains("memory") || lower.contains("memories") {
         return WorkspaceIntent::MemoryView;
     }
-    
+
     WorkspaceIntent::None
 }
 
 /// match general command keywords to intent
 fn match_command_keywords(content: &str) -> CommandIntent {
     let lower = content.to_lowercase();
-    
+
     // workspace commands (handled separately)
     let workspace_intent = match_workspace_keywords(content);
     if !matches!(workspace_intent, WorkspaceIntent::None) {
         return CommandIntent::Workspace(workspace_intent);
     }
-    
+
     // github issue patterns
     if lower.contains("issue") {
         if lower.contains("create") || lower.contains("new") {
             // extract title after "create issue" or "new issue"
-            let title = extract_after_keywords(&lower, &["create issue", "new issue", "issue create"]);
+            let title =
+                extract_after_keywords(&lower, &["create issue", "new issue", "issue create"]);
             if !title.is_empty() {
-                return CommandIntent::Issue(format!("create a github issue with title: {}", title));
+                return CommandIntent::Issue(format!(
+                    "create a github issue with title: {}",
+                    title
+                ));
             }
             return CommandIntent::Issue("create a github issue".to_string());
         }
         if lower.contains("list") || lower.contains("show all") {
-            let label = extract_after_keywords(&lower, &["list issues", "list issue", "issue list", "show issues"]);
+            let label = extract_after_keywords(
+                &lower,
+                &["list issues", "list issue", "issue list", "show issues"],
+            );
             if !label.is_empty() {
-                return CommandIntent::Issue(format!("list all github issues with label: {}", label));
+                return CommandIntent::Issue(format!(
+                    "list all github issues with label: {}",
+                    label
+                ));
             }
             return CommandIntent::Issue("list all github issues".to_string());
         }
@@ -891,35 +994,49 @@ fn match_command_keywords(content: &str) -> CommandIntent {
         }
         if lower.contains("comment") {
             if let Some(num) = extract_number(&lower) {
-                let comment_body = extract_after_keywords(&lower, &["comment on issue", "comment issue", "issue comment"]);
+                let comment_body = extract_after_keywords(
+                    &lower,
+                    &["comment on issue", "comment issue", "issue comment"],
+                );
                 if !comment_body.is_empty() {
-                    return CommandIntent::Issue(format!("comment on github issue #{} with body: {}", num, comment_body));
+                    return CommandIntent::Issue(format!(
+                        "comment on github issue #{} with body: {}",
+                        num, comment_body
+                    ));
                 }
                 return CommandIntent::Issue(format!("comment on github issue #{}", num));
             }
         }
         if lower.contains("assign") {
             if let Some(num) = extract_number(&lower) {
-                let user = extract_after_keywords(&lower, &["assign issue", "issue assign", "assign to"]);
+                let user =
+                    extract_after_keywords(&lower, &["assign issue", "issue assign", "assign to"]);
                 if !user.is_empty() {
-                    return CommandIntent::Issue(format!("assign github issue #{} to user: {}", num, user));
+                    return CommandIntent::Issue(format!(
+                        "assign github issue #{} to user: {}",
+                        num, user
+                    ));
                 }
                 return CommandIntent::Issue(format!("assign github issue #{}", num));
             }
         }
     }
-    
+
     // github pr patterns
     if lower.contains("pr") || lower.contains("pull request") {
         if lower.contains("create") || lower.contains("new") {
-            let title = extract_after_keywords(&lower, &["create pr", "new pr", "pr create", "create pull request"]);
+            let title = extract_after_keywords(
+                &lower,
+                &["create pr", "new pr", "pr create", "create pull request"],
+            );
             if !title.is_empty() {
                 return CommandIntent::Pr(format!("create a github pr with title: {}", title));
             }
             return CommandIntent::Pr("create a github pr".to_string());
         }
         if lower.contains("list") || lower.contains("show all") {
-            let state = extract_after_keywords(&lower, &["list pr", "pr list", "list pull request"]);
+            let state =
+                extract_after_keywords(&lower, &["list pr", "pr list", "list pull request"]);
             if !state.is_empty() {
                 return CommandIntent::Pr(format!("list all github prs with state: {}", state));
             }
@@ -932,7 +1049,10 @@ fn match_command_keywords(content: &str) -> CommandIntent {
         }
         if lower.contains("merge") {
             if let Some(num) = extract_number(&lower) {
-                return CommandIntent::Pr(format!("check ci status for pr #{} then merge github pr #{}", num, num));
+                return CommandIntent::Pr(format!(
+                    "check ci status for pr #{} then merge github pr #{}",
+                    num, num
+                ));
             }
         }
         if lower.contains("close") {
@@ -942,9 +1062,13 @@ fn match_command_keywords(content: &str) -> CommandIntent {
         }
         if lower.contains("comment") {
             if let Some(num) = extract_number(&lower) {
-                let comment_body = extract_after_keywords(&lower, &["comment on pr", "comment pr", "pr comment"]);
+                let comment_body =
+                    extract_after_keywords(&lower, &["comment on pr", "comment pr", "pr comment"]);
                 if !comment_body.is_empty() {
-                    return CommandIntent::Pr(format!("comment on github pr #{} with body: {}", num, comment_body));
+                    return CommandIntent::Pr(format!(
+                        "comment on github pr #{} with body: {}",
+                        num, comment_body
+                    ));
                 }
                 return CommandIntent::Pr(format!("comment on github pr #{}", num));
             }
@@ -960,7 +1084,7 @@ fn match_command_keywords(content: &str) -> CommandIntent {
             }
         }
     }
-    
+
     // ci status patterns
     if lower.contains("ci status") || lower.contains("status") || lower.contains("ci") {
         let workflow = extract_after_keywords(&lower, &["status", "ci status"]);
@@ -969,11 +1093,14 @@ fn match_command_keywords(content: &str) -> CommandIntent {
         }
         return CommandIntent::Status("check overall ci status".to_string());
     }
-    
+
     // release patterns
     if lower.contains("release") {
         if lower.contains("create") || lower.contains("new") {
-            let version = extract_after_keywords(&lower, &["create release", "new release", "release create"]);
+            let version = extract_after_keywords(
+                &lower,
+                &["create release", "new release", "release create"],
+            );
             if !version.is_empty() {
                 return CommandIntent::Release(format!("create release {}", version));
             }
@@ -983,7 +1110,7 @@ fn match_command_keywords(content: &str) -> CommandIntent {
             return CommandIntent::Release("list all releases".to_string());
         }
     }
-    
+
     // summarize patterns
     if lower.contains("summarize") || lower.contains("summary") {
         let target = extract_after_keywords(&lower, &["summarize", "summary"]);
@@ -992,10 +1119,19 @@ fn match_command_keywords(content: &str) -> CommandIntent {
         }
         return CommandIntent::Summarize("summarize".to_string());
     }
-    
+
     // weather patterns
     if lower.contains("weather") || lower.contains("temperature") || lower.contains("forecast") {
-        let location = extract_after_keywords(&lower, &["weather in", "weather for", "weather", "temperature in", "forecast for"]);
+        let location = extract_after_keywords(
+            &lower,
+            &[
+                "weather in",
+                "weather for",
+                "weather",
+                "temperature in",
+                "forecast for",
+            ],
+        );
         if !location.is_empty() {
             let location_encoded = location.replace(' ', "+");
             return CommandIntent::Weather(format!(
@@ -1004,13 +1140,17 @@ fn match_command_keywords(content: &str) -> CommandIntent {
             ));
         }
     }
-    
+
     // tmux patterns
     if lower.contains("tmux") {
         if lower.contains("create") || lower.contains("new") {
-            let session = extract_after_keywords(&lower, &["create tmux", "new tmux", "tmux create"]);
+            let session =
+                extract_after_keywords(&lower, &["create tmux", "new tmux", "tmux create"]);
             if !session.is_empty() {
-                return CommandIntent::Tmux(format!("use tmux skill to create session: {}", session));
+                return CommandIntent::Tmux(format!(
+                    "use tmux skill to create session: {}",
+                    session
+                ));
             }
         }
         if lower.contains("list") {
@@ -1019,17 +1159,24 @@ fn match_command_keywords(content: &str) -> CommandIntent {
         if lower.contains("attach") {
             let session = extract_after_keywords(&lower, &["attach", "attach to"]);
             if !session.is_empty() {
-                return CommandIntent::Tmux(format!("use tmux skill to attach to session: {}", session));
+                return CommandIntent::Tmux(format!(
+                    "use tmux skill to attach to session: {}",
+                    session
+                ));
             }
         }
     }
-    
+
     // skill patterns
     if lower.contains("skill") {
         if lower.contains("create") || lower.contains("new") {
-            let name = extract_after_keywords(&lower, &["create skill", "new skill", "skill create"]);
+            let name =
+                extract_after_keywords(&lower, &["create skill", "new skill", "skill create"]);
             if !name.is_empty() {
-                return CommandIntent::Skill(format!("use skill-creator to create skill: {}", name));
+                return CommandIntent::Skill(format!(
+                    "use skill-creator to create skill: {}",
+                    name
+                ));
             }
         }
         if lower.contains("list") {
@@ -1042,7 +1189,7 @@ fn match_command_keywords(content: &str) -> CommandIntent {
             }
         }
     }
-    
+
     CommandIntent::None
 }
 
@@ -1054,7 +1201,8 @@ fn extract_after_keywords(text: &str, keywords: &[&str]) -> String {
             let trimmed = after.trim();
             if !trimmed.is_empty() {
                 // take up to next keyword or end
-                let end = keywords.iter()
+                let end = keywords
+                    .iter()
                     .filter_map(|k| after.find(k))
                     .min()
                     .unwrap_or(after.len());
@@ -1113,17 +1261,24 @@ async fn execute_workspace_view(
             } else {
                 content
             };
-            channel_id.send_message(http, serenity::CreateMessage::new().content(format!(
-                "**{}**\n```\n{}\n```",
-                file_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy(),
-                preview
-            ))).await?;
+            channel_id
+                .send_message(
+                    http,
+                    serenity::CreateMessage::new().content(format!(
+                        "**{}**\n```\n{}\n```",
+                        file_path.file_name().unwrap_or_default().to_string_lossy(),
+                        preview
+                    )),
+                )
+                .await?;
         }
         Err(e) => {
-            channel_id.send_message(http, serenity::CreateMessage::new().content(format!("error reading file: {}", e))).await?;
+            channel_id
+                .send_message(
+                    http,
+                    serenity::CreateMessage::new().content(format!("error reading file: {}", e)),
+                )
+                .await?;
         }
     }
     Ok(())
@@ -1143,9 +1298,14 @@ async fn execute_workspace_heartbeat_list(
                 .lines()
                 .filter(|line| line.trim_start().starts_with("- [ ]"))
                 .collect();
-            
+
             if tasks.is_empty() {
-                channel_id.send_message(http, serenity::CreateMessage::new().content("no active heartbeat tasks")).await?;
+                channel_id
+                    .send_message(
+                        http,
+                        serenity::CreateMessage::new().content("no active heartbeat tasks"),
+                    )
+                    .await?;
             } else {
                 let task_list = tasks.join("\n");
                 let preview = if task_list.len() > 1900 {
@@ -1153,11 +1313,23 @@ async fn execute_workspace_heartbeat_list(
                 } else {
                     task_list
                 };
-                channel_id.send_message(http, serenity::CreateMessage::new().content(format!("**Active Heartbeat Tasks**\n```\n{}\n```", preview))).await?;
+                channel_id
+                    .send_message(
+                        http,
+                        serenity::CreateMessage::new()
+                            .content(format!("**Active Heartbeat Tasks**\n```\n{}\n```", preview)),
+                    )
+                    .await?;
             }
         }
         Err(e) => {
-            channel_id.send_message(http, serenity::CreateMessage::new().content(format!("error reading heartbeat: {}", e))).await?;
+            channel_id
+                .send_message(
+                    http,
+                    serenity::CreateMessage::new()
+                        .content(format!("error reading heartbeat: {}", e)),
+                )
+                .await?;
         }
     }
     Ok(())
@@ -1175,14 +1347,32 @@ async fn execute_workspace_memory_view(
     match tokio::fs::read_to_string(&memory_file).await {
         Ok(content) => {
             let preview = if content.len() > 1900 {
-                format!("{}...\n\n*(truncated, file is {} chars)*", &content[..1900], content.len())
+                format!(
+                    "{}...\n\n*(truncated, file is {} chars)*",
+                    &content[..1900],
+                    content.len()
+                )
             } else {
                 content
             };
-            channel_id.send_message(http, serenity::CreateMessage::new().content(format!("**Memory**\n```\n{}\n```", preview))).await?;
+            channel_id
+                .send_message(
+                    http,
+                    serenity::CreateMessage::new()
+                        .content(format!("**Memory**\n```\n{}\n```", preview)),
+                )
+                .await?;
         }
         Err(e) => {
-            channel_id.send_message(http, serenity::CreateMessage::new().content(format!("error reading memory: {} (file may not exist yet)", e))).await?;
+            channel_id
+                .send_message(
+                    http,
+                    serenity::CreateMessage::new().content(format!(
+                        "error reading memory: {} (file may not exist yet)",
+                        e
+                    )),
+                )
+                .await?;
         }
     }
     Ok(())
@@ -1221,10 +1411,7 @@ async fn workspace_view(
                 poise::CreateReply::default()
                     .content(format!(
                         "**{}**\n```\n{}\n```",
-                        file_path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy(),
+                        file_path.file_name().unwrap_or_default().to_string_lossy(),
                         preview
                     ))
                     .ephemeral(true),
@@ -1261,12 +1448,14 @@ async fn workspace_heartbeat_list(
                 .lines()
                 .filter(|line| line.trim_start().starts_with("- [ ]"))
                 .collect();
-            
+
             if tasks.is_empty() {
-                ctx.send(poise::CreateReply::default()
-                    .content("no active heartbeat tasks")
-                    .ephemeral(true))
-                    .await?;
+                ctx.send(
+                    poise::CreateReply::default()
+                        .content("no active heartbeat tasks")
+                        .ephemeral(true),
+                )
+                .await?;
             } else {
                 let task_list = tasks.join("\n");
                 let preview = if task_list.len() > 1900 {
@@ -1274,17 +1463,21 @@ async fn workspace_heartbeat_list(
                 } else {
                     task_list
                 };
-                ctx.send(poise::CreateReply::default()
-                    .content(format!("**Active Heartbeat Tasks**\n```\n{}\n```", preview))
-                    .ephemeral(true))
-                    .await?;
+                ctx.send(
+                    poise::CreateReply::default()
+                        .content(format!("**Active Heartbeat Tasks**\n```\n{}\n```", preview))
+                        .ephemeral(true),
+                )
+                .await?;
             }
         }
         Err(e) => {
-            ctx.send(poise::CreateReply::default()
-                .content(format!("error reading heartbeat: {}", e))
-                .ephemeral(true))
-                .await?;
+            ctx.send(
+                poise::CreateReply::default()
+                    .content(format!("error reading heartbeat: {}", e))
+                    .ephemeral(true),
+            )
+            .await?;
         }
     }
 
@@ -1306,20 +1499,31 @@ async fn workspace_memory_view(
     match tokio::fs::read_to_string(&memory_file).await {
         Ok(content) => {
             let preview = if content.len() > 1900 {
-                format!("{}...\n\n*(truncated, file is {} chars)*", &content[..1900], content.len())
+                format!(
+                    "{}...\n\n*(truncated, file is {} chars)*",
+                    &content[..1900],
+                    content.len()
+                )
             } else {
                 content
             };
-            ctx.send(poise::CreateReply::default()
-                .content(format!("**Memory**\n```\n{}\n```", preview))
-                .ephemeral(true))
-                .await?;
+            ctx.send(
+                poise::CreateReply::default()
+                    .content(format!("**Memory**\n```\n{}\n```", preview))
+                    .ephemeral(true),
+            )
+            .await?;
         }
         Err(e) => {
-            ctx.send(poise::CreateReply::default()
-                .content(format!("error reading memory: {} (file may not exist yet)", e))
-                .ephemeral(true))
-                .await?;
+            ctx.send(
+                poise::CreateReply::default()
+                    .content(format!(
+                        "error reading memory: {} (file may not exist yet)",
+                        e
+                    ))
+                    .ephemeral(true),
+            )
+            .await?;
         }
     }
 
@@ -1334,18 +1538,41 @@ async fn help(
 ) -> std::result::Result<(), DiscordError> {
     if let Some(cmd) = command {
         let help_text = match cmd.as_str() {
-            "issue" => "**Issue Management**\n`/issue create <title> [body]` - create new issue (member)\n`/issue list [label]` - list all issues (guest)\n`/issue view <number>` - view issue details (guest)\n`/issue close <number>` - close issue (member)\n`/issue comment <number> <body>` - comment on issue (member)\n`/issue assign <number> <github_username>` - assign issue to github user (admin)",
-            "pr" => "**PR Management**\n`/pr create <title> [base] [head]` - create new pr (member)\n`/pr list [state]` - list prs (guest)\n`/pr view <number>` - view pr details (guest)\n`/pr merge <number>` - merge pr (admin only, checks CI)\n`/pr comment <number> <body>` - comment on pr (member)\n`/pr review <number> <approve|reject>` - code review (member)\n`/pr close <number>` - close pr (member)",
-            "status" => "**CI Status**\n`/status [workflow]` - check ci status for workflow or overall",
-            "release" => "**Release Management**\n`/release [version] create` - create release (admin only)\n`/release [version]` - view release\n`/release` - list all releases",
-            "summarize" => "**Summarize**\n`/summarize <url|file> [length]` - summarize url or file\nlength: short|medium|long|xl|xxl",
-            "weather" => "**Weather**\n`/weather <location> [format]` - get weather info\nformat: compact|full|current",
-            "tmux" => "**Tmux**\n`/tmux create <session>` - create session\n`/tmux list` - list sessions\n`/tmux attach <session>` - attach to session\n`/tmux send <session> <command>` - send command\n`/tmux capture <session>` - capture output",
-            "skill" => "**Skill Management**\n`/skill create <name> [description]` - create skill (admin only)\n`/skill update <name>` - update skill (admin only)\n`/skill list` - list all skills\n`/skill view <name>` - view skill details",
-            "workspace" => "**Workspace Management**\n`/workspace view <file>` - view workspace file (soul|user|agents|tools|heartbeat)\n`/workspace heartbeat list` - list heartbeat tasks\n`/workspace memory view` - view memory",
+            "issue" => {
+                "**Issue Management**\n`/issue create <title> [body]` - create new issue (member)\n`/issue list [label]` - list all issues (guest)\n`/issue view <number>` - view issue details (guest)\n`/issue close <number>` - close issue (member)\n`/issue comment <number> <body>` - comment on issue (member)\n`/issue assign <number> <github_username>` - assign issue to github user (admin)"
+            }
+            "pr" => {
+                "**PR Management**\n`/pr create <title> [base] [head]` - create new pr (member)\n`/pr list [state]` - list prs (guest)\n`/pr view <number>` - view pr details (guest)\n`/pr merge <number>` - merge pr (admin only, checks CI)\n`/pr comment <number> <body>` - comment on pr (member)\n`/pr review <number> <approve|reject>` - code review (member)\n`/pr close <number>` - close pr (member)"
+            }
+            "status" => {
+                "**CI Status**\n`/status [workflow]` - check ci status for workflow or overall"
+            }
+            "release" => {
+                "**Release Management**\n`/release [version] create` - create release (admin only)\n`/release [version]` - view release\n`/release` - list all releases"
+            }
+            "summarize" => {
+                "**Summarize**\n`/summarize <url|file> [length]` - summarize url or file\nlength: short|medium|long|xl|xxl"
+            }
+            "weather" => {
+                "**Weather**\n`/weather <location> [format]` - get weather info\nformat: compact|full|current"
+            }
+            "tmux" => {
+                "**Tmux**\n`/tmux create <session>` - create session\n`/tmux list` - list sessions\n`/tmux attach <session>` - attach to session\n`/tmux send <session> <command>` - send command\n`/tmux capture <session>` - capture output"
+            }
+            "skill" => {
+                "**Skill Management**\n`/skill create <name> [description]` - create skill (admin only)\n`/skill update <name>` - update skill (admin only)\n`/skill list` - list all skills\n`/skill view <name>` - view skill details"
+            }
+            "workspace" => {
+                "**Workspace Management**\n`/workspace view <file>` - view workspace file (soul|user|agents|tools|heartbeat)\n`/workspace heartbeat list` - list heartbeat tasks\n`/workspace memory view` - view memory"
+            }
             _ => "unknown command. use `/help` to see all commands",
         };
-        ctx.send(poise::CreateReply::default().content(help_text).ephemeral(true)).await?;
+        ctx.send(
+            poise::CreateReply::default()
+                .content(help_text)
+                .ephemeral(true),
+        )
+        .await?;
     } else {
         let help_text = r#"**Help**
 
@@ -1362,7 +1589,12 @@ async fn help(
 `/help [command]`
 
 More: `/help <command>` for detailed usage"#;
-        ctx.send(poise::CreateReply::default().content(help_text).ephemeral(true)).await?;
+        ctx.send(
+            poise::CreateReply::default()
+                .content(help_text)
+                .ephemeral(true),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -1478,25 +1710,54 @@ impl Channel for DiscordChannel {
                 match match_command_keywords(&content) {
                     CommandIntent::Workspace(WorkspaceIntent::ViewFile(file)) => {
                         debug!("matched workspace view file keyword: {:?}", file);
-                        if let Err(e) = execute_workspace_view(ctx.http.as_ref(), new_message.channel_id, file).await {
+                        if let Err(e) =
+                            execute_workspace_view(ctx.http.as_ref(), new_message.channel_id, file)
+                                .await
+                        {
                             error!("failed to execute workspace view: {}", e);
-                            let _ = new_message.channel_id.send_message(ctx.http.as_ref(), serenity::CreateMessage::new().content(format!("error: {}", e))).await;
+                            let _ = new_message
+                                .channel_id
+                                .send_message(
+                                    ctx.http.as_ref(),
+                                    serenity::CreateMessage::new().content(format!("error: {}", e)),
+                                )
+                                .await;
                         }
                         return;
                     }
                     CommandIntent::Workspace(WorkspaceIntent::HeartbeatList) => {
                         debug!("matched workspace heartbeat list keyword");
-                        if let Err(e) = execute_workspace_heartbeat_list(ctx.http.as_ref(), new_message.channel_id).await {
+                        if let Err(e) = execute_workspace_heartbeat_list(
+                            ctx.http.as_ref(),
+                            new_message.channel_id,
+                        )
+                        .await
+                        {
                             error!("failed to execute workspace heartbeat list: {}", e);
-                            let _ = new_message.channel_id.send_message(ctx.http.as_ref(), serenity::CreateMessage::new().content(format!("error: {}", e))).await;
+                            let _ = new_message
+                                .channel_id
+                                .send_message(
+                                    ctx.http.as_ref(),
+                                    serenity::CreateMessage::new().content(format!("error: {}", e)),
+                                )
+                                .await;
                         }
                         return;
                     }
                     CommandIntent::Workspace(WorkspaceIntent::MemoryView) => {
                         debug!("matched workspace memory view keyword");
-                        if let Err(e) = execute_workspace_memory_view(ctx.http.as_ref(), new_message.channel_id).await {
+                        if let Err(e) =
+                            execute_workspace_memory_view(ctx.http.as_ref(), new_message.channel_id)
+                                .await
+                        {
                             error!("failed to execute workspace memory view: {}", e);
-                            let _ = new_message.channel_id.send_message(ctx.http.as_ref(), serenity::CreateMessage::new().content(format!("error: {}", e))).await;
+                            let _ = new_message
+                                .channel_id
+                                .send_message(
+                                    ctx.http.as_ref(),
+                                    serenity::CreateMessage::new().content(format!("error: {}", e)),
+                                )
+                                .await;
                         }
                         return;
                     }
@@ -1506,7 +1767,8 @@ impl Channel for DiscordChannel {
                     }
                     CommandIntent::Issue(request) => {
                         debug!("matched issue keyword, sending to agent: {}", request);
-                        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+                        let inbound_msg =
+                            InboundMessage::new("discord", &sender_id, &chat_id, &request);
                         if let Err(e) = self.bus.publish_inbound(inbound_msg).await {
                             error!("failed to publish issue command to bus: {}", e);
                         }
@@ -1514,7 +1776,8 @@ impl Channel for DiscordChannel {
                     }
                     CommandIntent::Pr(request) => {
                         debug!("matched pr keyword, sending to agent: {}", request);
-                        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+                        let inbound_msg =
+                            InboundMessage::new("discord", &sender_id, &chat_id, &request);
                         if let Err(e) = self.bus.publish_inbound(inbound_msg).await {
                             error!("failed to publish pr command to bus: {}", e);
                         }
@@ -1522,7 +1785,8 @@ impl Channel for DiscordChannel {
                     }
                     CommandIntent::Status(request) => {
                         debug!("matched status keyword, sending to agent: {}", request);
-                        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+                        let inbound_msg =
+                            InboundMessage::new("discord", &sender_id, &chat_id, &request);
                         if let Err(e) = self.bus.publish_inbound(inbound_msg).await {
                             error!("failed to publish status command to bus: {}", e);
                         }
@@ -1530,7 +1794,8 @@ impl Channel for DiscordChannel {
                     }
                     CommandIntent::Release(request) => {
                         debug!("matched release keyword, sending to agent: {}", request);
-                        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+                        let inbound_msg =
+                            InboundMessage::new("discord", &sender_id, &chat_id, &request);
                         if let Err(e) = self.bus.publish_inbound(inbound_msg).await {
                             error!("failed to publish release command to bus: {}", e);
                         }
@@ -1538,7 +1803,8 @@ impl Channel for DiscordChannel {
                     }
                     CommandIntent::Summarize(request) => {
                         debug!("matched summarize keyword, sending to agent: {}", request);
-                        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+                        let inbound_msg =
+                            InboundMessage::new("discord", &sender_id, &chat_id, &request);
                         if let Err(e) = self.bus.publish_inbound(inbound_msg).await {
                             error!("failed to publish summarize command to bus: {}", e);
                         }
@@ -1546,7 +1812,8 @@ impl Channel for DiscordChannel {
                     }
                     CommandIntent::Weather(request) => {
                         debug!("matched weather keyword, sending to agent: {}", request);
-                        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+                        let inbound_msg =
+                            InboundMessage::new("discord", &sender_id, &chat_id, &request);
                         if let Err(e) = self.bus.publish_inbound(inbound_msg).await {
                             error!("failed to publish weather command to bus: {}", e);
                         }
@@ -1554,7 +1821,8 @@ impl Channel for DiscordChannel {
                     }
                     CommandIntent::Tmux(request) => {
                         debug!("matched tmux keyword, sending to agent: {}", request);
-                        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+                        let inbound_msg =
+                            InboundMessage::new("discord", &sender_id, &chat_id, &request);
                         if let Err(e) = self.bus.publish_inbound(inbound_msg).await {
                             error!("failed to publish tmux command to bus: {}", e);
                         }
@@ -1562,7 +1830,8 @@ impl Channel for DiscordChannel {
                     }
                     CommandIntent::Skill(request) => {
                         debug!("matched skill keyword, sending to agent: {}", request);
-                        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+                        let inbound_msg =
+                            InboundMessage::new("discord", &sender_id, &chat_id, &request);
                         if let Err(e) = self.bus.publish_inbound(inbound_msg).await {
                             error!("failed to publish skill command to bus: {}", e);
                         }
@@ -1673,7 +1942,10 @@ impl Channel for DiscordChannel {
             while *running_clone.read().await {
                 match outbound_rx.recv().await {
                     Ok(msg) if msg.channel == "discord" => {
-                        debug!("📤 sending outbound message to discord - chat_id: {}", msg.chat_id);
+                        debug!(
+                            "📤 sending outbound message to discord - chat_id: {}",
+                            msg.chat_id
+                        );
 
                         let http_guard = http_ref_clone.read().await;
                         let http = match http_guard.as_ref() {
@@ -1696,7 +1968,7 @@ impl Channel for DiscordChannel {
                         // Discord has a 2000 character limit per message, so we need to chunk long messages
                         const MAX_MESSAGE_LENGTH: usize = 2000;
                         let content = &msg.content;
-                        
+
                         if content.len() <= MAX_MESSAGE_LENGTH {
                             // Single message, send directly
                             match channel_id.say(&*http, content).await {
@@ -1711,7 +1983,7 @@ impl Channel for DiscordChannel {
                             // Split into chunks, trying to split on newlines for better readability
                             let mut chunks = Vec::new();
                             let mut current_chunk = String::new();
-                            
+
                             for line in content.lines() {
                                 // If adding this line would exceed the limit, start a new chunk
                                 let line_with_newline = if current_chunk.is_empty() {
@@ -1719,7 +1991,7 @@ impl Channel for DiscordChannel {
                                 } else {
                                     line.len() + 1 // +1 for newline
                                 };
-                                
+
                                 if current_chunk.len() + line_with_newline > MAX_MESSAGE_LENGTH {
                                     if !current_chunk.is_empty() {
                                         chunks.push(current_chunk.clone());
@@ -1727,7 +1999,11 @@ impl Channel for DiscordChannel {
                                     }
                                     // If a single line is too long, split it by character
                                     if line.len() > MAX_MESSAGE_LENGTH {
-                                        for chunk in line.chars().collect::<Vec<_>>().chunks(MAX_MESSAGE_LENGTH) {
+                                        for chunk in line
+                                            .chars()
+                                            .collect::<Vec<_>>()
+                                            .chunks(MAX_MESSAGE_LENGTH)
+                                        {
                                             chunks.push(chunk.iter().collect());
                                         }
                                     } else {
@@ -1743,68 +2019,105 @@ impl Channel for DiscordChannel {
                             if !current_chunk.is_empty() {
                                 chunks.push(current_chunk);
                             }
-                            
+
                             // Send all chunks
                             for (i, chunk) in chunks.iter().enumerate() {
                                 let chunk_content = if chunks.len() > 1 {
                                     // Add part indicator, but keep it under the limit
-                                    let indicator = format!("*Part {} of {}*\n\n", i + 1, chunks.len());
-                                    let available_space = MAX_MESSAGE_LENGTH.saturating_sub(indicator.len());
+                                    let indicator =
+                                        format!("*Part {} of {}*\n\n", i + 1, chunks.len());
+                                    let available_space =
+                                        MAX_MESSAGE_LENGTH.saturating_sub(indicator.len());
                                     if chunk.len() > available_space {
                                         // If chunk is still too long with indicator, truncate chunk
-                                        format!("{}*Part {} of {}*\n\n{}", 
-                                            &chunk[..available_space.min(chunk.len())], 
-                                            i + 1, 
+                                        format!(
+                                            "{}*Part {} of {}*\n\n{}",
+                                            &chunk[..available_space.min(chunk.len())],
+                                            i + 1,
                                             chunks.len(),
-                                            if chunk.len() > available_space { "..." } else { "" })
+                                            if chunk.len() > available_space {
+                                                "..."
+                                            } else {
+                                                ""
+                                            }
+                                        )
                                     } else {
                                         format!("{}{}", indicator, chunk)
                                     }
                                 } else {
                                     chunk.clone()
                                 };
-                                
+
                                 // Ensure final content doesn't exceed limit
                                 let final_content = if chunk_content.len() > MAX_MESSAGE_LENGTH {
-                                    chunk_content.chars().take(MAX_MESSAGE_LENGTH).collect::<String>()
+                                    chunk_content
+                                        .chars()
+                                        .take(MAX_MESSAGE_LENGTH)
+                                        .collect::<String>()
                                 } else {
                                     chunk_content
                                 };
-                                
+
                                 match channel_id.say(&*http, &final_content).await {
                                     Ok(_) => {
-                                        debug!("sent message chunk {}/{} to discord channel {}", i + 1, chunks.len(), msg.chat_id);
+                                        debug!(
+                                            "sent message chunk {}/{} to discord channel {}",
+                                            i + 1,
+                                            chunks.len(),
+                                            msg.chat_id
+                                        );
                                     }
                                     Err(e) => {
                                         // Check for specific HTTP error status codes in error message
                                         let error_str = e.to_string();
-                                        let error_msg = if error_str.contains("401") || error_str.contains("Unauthorized") {
-                                            error!("discord authentication failed (401): token may be expired or invalid - {}", error_str);
+                                        let error_msg = if error_str.contains("401")
+                                            || error_str.contains("Unauthorized")
+                                        {
+                                            error!(
+                                                "discord authentication failed (401): token may be expired or invalid - {}",
+                                                error_str
+                                            );
                                             "error: bot authentication failed. please check bot token."
-                                        } else if error_str.contains("403") || error_str.contains("Forbidden") {
-                                            error!("discord permission denied (403): bot lacks permissions in channel {} - {}", msg.chat_id, error_str);
+                                        } else if error_str.contains("403")
+                                            || error_str.contains("Forbidden")
+                                        {
+                                            error!(
+                                                "discord permission denied (403): bot lacks permissions in channel {} - {}",
+                                                msg.chat_id, error_str
+                                            );
                                             "error: bot doesn't have permission to send messages in this channel."
-                                        } else if error_str.contains("404") || error_str.contains("Not Found") {
-                                            error!("discord channel not found (404): channel {} may have been deleted - {}", msg.chat_id, error_str);
+                                        } else if error_str.contains("404")
+                                            || error_str.contains("Not Found")
+                                        {
+                                            error!(
+                                                "discord channel not found (404): channel {} may have been deleted - {}",
+                                                msg.chat_id, error_str
+                                            );
                                             "error: channel not found. it may have been deleted."
                                         } else {
-                                            error!("failed to send message chunk {}/{} to discord: {}", i + 1, chunks.len(), e);
+                                            error!(
+                                                "failed to send message chunk {}/{} to discord: {}",
+                                                i + 1,
+                                                chunks.len(),
+                                                e
+                                            );
                                             "error: failed to send message."
                                         };
-                                        
+
                                         // Try to send error message to user (if possible)
                                         if i == 0 {
                                             // Only try to send error on first chunk to avoid spam
                                             let _ = channel_id.say(&*http, error_msg).await;
                                         }
-                                        
+
                                         break; // Stop sending remaining chunks on error
                                     }
                                 }
-                                
+
                                 // Small delay between chunks to avoid rate limiting
                                 if i < chunks.len() - 1 {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(500))
+                                        .await;
                                 }
                             }
                         }

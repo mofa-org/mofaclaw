@@ -54,6 +54,9 @@ impl ChannelManager {
         if self.config.feishu.enabled {
             enabled.push("feishu".to_string());
         }
+        if self.config.discord.enabled {
+            enabled.push("discord".to_string());
+        }
 
         enabled
     }
@@ -122,6 +125,7 @@ impl ChannelManager {
             || self.config.whatsapp.enabled
             || self.config.dingtalk.enabled
             || self.config.feishu.enabled
+            || self.config.discord.enabled
     }
 }
 

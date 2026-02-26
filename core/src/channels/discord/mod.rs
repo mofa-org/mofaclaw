@@ -190,6 +190,10 @@ async fn issue(
         }
         IssueAction::List => {
             // List requires Guest permission (everyone can list)
+            if !channel.is_guest(&roles) {
+                ctx.say("error: list operation requires guest permission").await?;
+                return Ok(());
+            }
             let mut req = "list all github issues".to_string();
             if let Some(l) = label {
                 req.push_str(&format!(" with label: {}", l));
@@ -198,6 +202,10 @@ async fn issue(
         }
         IssueAction::View => {
             // View requires Guest permission (everyone can view)
+            if !channel.is_guest(&roles) {
+                ctx.say("error: view operation requires guest permission").await?;
+                return Ok(());
+            }
             if let Some(n) = number {
                 format!("view github issue #{}", n)
             } else {
@@ -328,6 +336,10 @@ async fn pr(
         }
         PrAction::List => {
             // List requires Guest permission (everyone can list)
+            if !channel.is_guest(&roles) {
+                ctx.say("error: list operation requires guest permission").await?;
+                return Ok(());
+            }
             let mut req = "list all pull requests".to_string();
             if let Some(s) = state {
                 req.push_str(&format!(" with state: {}", s));
@@ -336,6 +348,10 @@ async fn pr(
         }
         PrAction::View => {
             // View requires Guest permission (everyone can view)
+            if !channel.is_guest(&roles) {
+                ctx.say("error: view operation requires guest permission").await?;
+                return Ok(());
+            }
             if let Some(n) = number {
                 format!("view pull request #{}", n)
             } else {

@@ -10,65 +10,69 @@ authors = ["李靖"]
 repository = "https://github.com/mofa-org/mofaclaw"
 
 [workspace.dependencies]
-# Async runtime
+# async runtime
 tokio = { version = "1.42", features = ["full"] }
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
 
-# Serialization
+# serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Configuration
+# configuration
 config = "0.15"
 
-# Logging
+# logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Error handling
+# error handling
 anyhow = "1.0"
 thiserror = "2.0"
 
-# Async traits
+# async traits
 async-trait = "0.1"
 
-# HTTP client
+# http client
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 
-# HTTP server for webhooks
+# http server for webhooks
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
 
-# CLI
+# cli
 clap = { version = "4.5", features = ["derive"] }
 console = "0.15"
 
-# Telegram
+# telegram
 teloxide = { version = "0.13", features = ["macros"] }
 
-# Cron scheduling
+# discord
+serenity = { version = "0.12", features = ["standard_framework", "cache", "http", "gateway", "model", "utils"] }
+poise = "0.6.1"
+
+# cron scheduling
 cron = "0.13"
 
-# UUID
+# uuid
 uuid = { version = "1.11", features = ["v4"] }
 
-# Date/time
+# date/time
 chrono = { version = "0.4", features = ["serde"] }
 
-# File system
+# file system
 dirs = "5.0"
 path-clean = "1.0"
 
-# HTML parsing for web tools
+# html parsing for web tools
 readability = "0"
 html2md = "0.2"
 
-# Environment variables
+# environment variables
 dotenvy = "0.15"
 
-# Utility
+# utility
 regex = "1.11"
 which = "7.0"
 html-escape = "0.2"

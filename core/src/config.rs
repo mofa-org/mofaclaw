@@ -125,6 +125,29 @@ fn default_feishu_group_policy() -> String {
     "open".to_string()
 }
 
+/// discord channel configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DiscordConfig {
+    /// whether discord is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// bot token from discord developer portal
+    #[serde(default)]
+    pub token: String,
+    /// application id (bot application id)
+    #[serde(default)]
+    pub application_id: u64,
+    /// guild id (optional, for guild-specific commands)
+    #[serde(default)]
+    pub guild_id: Option<u64>,
+    /// allowed users/roles (user ids or role ids as strings)
+    #[serde(default)]
+    pub allow_from: Vec<String>,
+    /// admin role list (role ids as strings)
+    #[serde(default)]
+    pub admin_roles: Vec<String>,
+}
+
 fn default_dm_policy() -> String {
     "open".to_string()
 }
@@ -137,7 +160,7 @@ fn default_message_type() -> String {
     "markdown".to_string()
 }
 
-/// Configuration for chat channels
+/// configuration for chat channels
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChannelsConfig {
     /// WhatsApp configuration
@@ -149,9 +172,12 @@ pub struct ChannelsConfig {
     /// DingTalk configuration
     #[serde(default)]
     pub dingtalk: DingTalkConfig,
-    /// Feishu (Lark) configuration
+    /// feishu (lark) configuration
     #[serde(default)]
     pub feishu: FeishuConfig,
+    /// discord configuration
+    #[serde(default)]
+    pub discord: DiscordConfig,
 }
 
 /// Default agent configuration
@@ -391,6 +417,8 @@ impl Config {
                     .clone()
                     .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string()),
             )
+        } else if !self.providers.anthropic.api_key.is_empty() {
+            self.providers.anthropic.api_base.clone()
         } else if !self.providers.zhipu.api_key.is_empty() {
             self.providers.zhipu.api_base.clone()
         } else if self.providers.vllm.api_base.is_some() {

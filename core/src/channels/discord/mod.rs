@@ -42,6 +42,10 @@ pub enum IssueAction {
     View,
     #[name = "close"]
     Close,
+    #[name = "comment"]
+    Comment,
+    #[name = "assign"]
+    Assign,
 }
 
 /// pr action enum
@@ -57,6 +61,19 @@ pub enum PrAction {
     Merge,
     #[name = "close"]
     Close,
+    #[name = "comment"]
+    Comment,
+    #[name = "review"]
+    Review,
+}
+
+/// pr review action enum
+#[derive(Debug, poise::ChoiceParameter)]
+pub enum PrReviewAction {
+    #[name = "approve"]
+    Approve,
+    #[name = "reject"]
+    Reject,
 }
 
 impl DiscordChannel {
@@ -91,6 +108,20 @@ impl DiscordChannel {
             && roles.iter().any(|role| self.config.admin_roles.contains(role))
     }
 
+    /// check if user has member role (or admin role)
+    fn is_member(&self, roles: &[String]) -> bool {
+        // members include both member_roles and admin_roles
+        self.is_admin(roles)
+            || (!self.config.member_roles.is_empty()
+                && roles.iter().any(|role| self.config.member_roles.contains(role)))
+    }
+
+    /// check if user is guest (anyone can be a guest, but not restricted)
+    fn is_guest(&self, _roles: &[String]) -> bool {
+        // guests have no restrictions - everyone is a guest by default
+        true
+    }
+
     /// get user roles from discord context
     async fn get_user_roles(
         guild_id: Option<serenity::GuildId>,
@@ -122,8 +153,15 @@ async fn issue(
     ctx: poise::Context<'_, Data, DiscordError>,
     #[description = "action type"] action: IssueAction,
     #[description = "issue title"] title: Option<String>,
+    #[description = "issue body"] body: Option<String>,
     #[description = "issue number"] number: Option<u32>,
+    #[description = "comment body"] comment: Option<String>,
+    #[description = "user to assign"] assignee: Option<serenity::User>,
+    #[description = "label filter"] label: Option<String>,
 ) -> std::result::Result<(), DiscordError> {
+    // show typing indicator
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
     let user_id = ctx.author().id.to_string();
     let username = ctx.author().name.clone();
     let sender_id = format!("{}|{}", user_id, username);
@@ -134,15 +172,32 @@ async fn issue(
 
     let request = match action {
         IssueAction::Create => {
+            // Create requires Member permission
+            if !channel.is_member(&roles) {
+                ctx.say("error: create operation requires member role").await?;
+                return Ok(());
+            }
             if let Some(t) = title {
-                format!("create a github issue with title: {}", t)
+                let mut req = format!("create a github issue with title: {}", t);
+                if let Some(b) = body {
+                    req.push_str(&format!(" and body: {}", b));
+                }
+                req
             } else {
                 ctx.say("issue title required for create action").await?;
                 return Ok(());
             }
         }
-        IssueAction::List => "list all github issues".to_string(),
+        IssueAction::List => {
+            // List requires Guest permission (everyone can list)
+            let mut req = "list all github issues".to_string();
+            if let Some(l) = label {
+                req.push_str(&format!(" with label: {}", l));
+            }
+            req
+        }
         IssueAction::View => {
+            // View requires Guest permission (everyone can view)
             if let Some(n) = number {
                 format!("view github issue #{}", n)
             } else {
@@ -151,8 +206,9 @@ async fn issue(
             }
         }
         IssueAction::Close => {
-            if !channel.is_admin(&roles) {
-                ctx.say("error: close operation requires admin role").await?;
+            // Close requires Member permission
+            if !channel.is_member(&roles) {
+                ctx.say("error: close operation requires member role").await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -162,14 +218,64 @@ async fn issue(
                 return Ok(());
             }
         }
+        IssueAction::Comment => {
+            // Comment requires Member permission
+            if !channel.is_member(&roles) {
+                ctx.say("error: comment operation requires member role").await?;
+                return Ok(());
+            }
+            if let Some(n) = number {
+                if let Some(c) = comment {
+                    format!("comment on github issue #{} with body: {}", n, c)
+                } else {
+                    ctx.say("comment body required for comment action").await?;
+                    return Ok(());
+                }
+            } else {
+                ctx.say("issue number required for comment action").await?;
+                return Ok(());
+            }
+        }
+        IssueAction::Assign => {
+            // Assign requires Admin permission
+            if !channel.is_admin(&roles) {
+                ctx.say("error: assign operation requires admin role").await?;
+                return Ok(());
+            }
+            if let Some(n) = number {
+                if let Some(user) = assignee {
+                    format!("assign github issue #{} to user: {}", n, user.name)
+                } else {
+                    ctx.say("assignee user required for assign action").await?;
+                    return Ok(());
+                }
+            } else {
+                ctx.say("issue number required for assign action").await?;
+                return Ok(());
+            }
+        }
     };
 
-    ctx.say("processing issue request...").await?;
+    // send formatted embed response
+    let embed = serenity::CreateEmbed::default()
+        .title("GitHub Issue")
+        .description(format!("Processing: {}", request))
+        .color(0x5865F2) // Discord blurple
+        .timestamp(serenity::Timestamp::now());
+
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish issue command to bus: {}", e);
-        ctx.say(format!("error: failed to process issue request: {}", e)).await?;
+        
+        let error_embed = serenity::CreateEmbed::default()
+            .title("Error")
+            .description(format!("Failed to process issue request: {}", e))
+            .color(0xED4245) // Discord red
+            .timestamp(serenity::Timestamp::now());
+        
+        ctx.send(poise::CreateReply::default().embed(error_embed)).await?;
     }
 
     Ok(())
@@ -181,7 +287,12 @@ async fn pr(
     ctx: poise::Context<'_, Data, DiscordError>,
     #[description = "action type"] action: PrAction,
     #[description = "pr title"] title: Option<String>,
+    #[description = "base branch"] base: Option<String>,
+    #[description = "head branch"] head: Option<String>,
     #[description = "pr number"] number: Option<u32>,
+    #[description = "state (open/closed/all)"] state: Option<String>,
+    #[description = "comment body"] comment: Option<String>,
+    #[description = "review action"] review_action: Option<PrReviewAction>,
 ) -> std::result::Result<(), DiscordError> {
     // show typing indicator
     let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
@@ -196,15 +307,35 @@ async fn pr(
 
     let request = match action {
         PrAction::Create => {
+            // Create requires Member permission
+            if !channel.is_member(&roles) {
+                ctx.say("error: create operation requires member role").await?;
+                return Ok(());
+            }
             if let Some(t) = title {
-                format!("create a pull request with title: {}", t)
+                let mut req = format!("create a pull request with title: {}", t);
+                if let Some(b) = base {
+                    req.push_str(&format!(" from base: {}", b));
+                }
+                if let Some(h) = head {
+                    req.push_str(&format!(" to head: {}", h));
+                }
+                req
             } else {
                 ctx.say("pr title required for create action").await?;
                 return Ok(());
             }
         }
-        PrAction::List => "list all pull requests".to_string(),
+        PrAction::List => {
+            // List requires Guest permission (everyone can list)
+            let mut req = "list all pull requests".to_string();
+            if let Some(s) = state {
+                req.push_str(&format!(" with state: {}", s));
+            }
+            req
+        }
         PrAction::View => {
+            // View requires Guest permission (everyone can view)
             if let Some(n) = number {
                 format!("view pull request #{}", n)
             } else {
@@ -213,20 +344,23 @@ async fn pr(
             }
         }
         PrAction::Merge => {
+            // Merge requires Admin permission
             if !channel.is_admin(&roles) {
                 ctx.say("error: merge operation requires admin role").await?;
                 return Ok(());
             }
             if let Some(n) = number {
-                format!("merge pull request #{}", n)
+                // Check CI status before merge
+                format!("check ci status for pr #{} then merge pull request #{}", n, n)
             } else {
                 ctx.say("pr number required for merge action").await?;
                 return Ok(());
             }
         }
         PrAction::Close => {
-            if !channel.is_admin(&roles) {
-                ctx.say("error: close operation requires admin role").await?;
+            // Close requires Member permission
+            if !channel.is_member(&roles) {
+                ctx.say("error: close operation requires member role").await?;
                 return Ok(());
             }
             if let Some(n) = number {
@@ -236,14 +370,71 @@ async fn pr(
                 return Ok(());
             }
         }
+        PrAction::Comment => {
+            // Comment requires Member permission
+            if !channel.is_member(&roles) {
+                ctx.say("error: comment operation requires member role").await?;
+                return Ok(());
+            }
+            if let Some(n) = number {
+                if let Some(c) = comment {
+                    format!("comment on pull request #{} with body: {}", n, c)
+                } else {
+                    ctx.say("comment body required for comment action").await?;
+                    return Ok(());
+                }
+            } else {
+                ctx.say("pr number required for comment action").await?;
+                return Ok(());
+            }
+        }
+        PrAction::Review => {
+            // Review requires Member permission
+            if !channel.is_member(&roles) {
+                ctx.say("error: review operation requires member role").await?;
+                return Ok(());
+            }
+            if let Some(n) = number {
+                if let Some(review) = review_action {
+                    match review {
+                        PrReviewAction::Approve => {
+                            format!("approve pull request #{}", n)
+                        }
+                        PrReviewAction::Reject => {
+                            format!("reject pull request #{}", n)
+                        }
+                    }
+                } else {
+                    ctx.say("review action (approve/reject) required for review action").await?;
+                    return Ok(());
+                }
+            } else {
+                ctx.say("pr number required for review action").await?;
+                return Ok(());
+            }
+        }
     };
 
-    ctx.say("processing pr request...").await?;
+    // send formatted embed response
+    let embed = serenity::CreateEmbed::default()
+        .title("GitHub Pull Request")
+        .description(format!("Processing: {}", request))
+        .color(0x5865F2) // Discord blurple
+        .timestamp(serenity::Timestamp::now());
+
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish pr command to bus: {}", e);
-        ctx.say(format!("error: failed to process pr request: {}", e)).await?;
+        
+        let error_embed = serenity::CreateEmbed::default()
+            .title("Error")
+            .description(format!("Failed to process pr request: {}", e))
+            .color(0xED4245) // Discord red
+            .timestamp(serenity::Timestamp::now());
+        
+        ctx.send(poise::CreateReply::default().embed(error_embed)).await?;
     }
 
     Ok(())
@@ -661,6 +852,10 @@ fn match_command_keywords(content: &str) -> CommandIntent {
             return CommandIntent::Issue("create a github issue".to_string());
         }
         if lower.contains("list") || lower.contains("show all") {
+            let label = extract_after_keywords(&lower, &["list issues", "list issue", "issue list", "show issues"]);
+            if !label.is_empty() {
+                return CommandIntent::Issue(format!("list all github issues with label: {}", label));
+            }
             return CommandIntent::Issue("list all github issues".to_string());
         }
         if lower.contains("view") || lower.contains("show") {
@@ -672,6 +867,24 @@ fn match_command_keywords(content: &str) -> CommandIntent {
         if lower.contains("close") {
             if let Some(num) = extract_number(&lower) {
                 return CommandIntent::Issue(format!("close github issue #{}", num));
+            }
+        }
+        if lower.contains("comment") {
+            if let Some(num) = extract_number(&lower) {
+                let comment_body = extract_after_keywords(&lower, &["comment on issue", "comment issue", "issue comment"]);
+                if !comment_body.is_empty() {
+                    return CommandIntent::Issue(format!("comment on github issue #{} with body: {}", num, comment_body));
+                }
+                return CommandIntent::Issue(format!("comment on github issue #{}", num));
+            }
+        }
+        if lower.contains("assign") {
+            if let Some(num) = extract_number(&lower) {
+                let user = extract_after_keywords(&lower, &["assign issue", "issue assign", "assign to"]);
+                if !user.is_empty() {
+                    return CommandIntent::Issue(format!("assign github issue #{} to user: {}", num, user));
+                }
+                return CommandIntent::Issue(format!("assign github issue #{}", num));
             }
         }
     }
@@ -686,6 +899,10 @@ fn match_command_keywords(content: &str) -> CommandIntent {
             return CommandIntent::Pr("create a github pr".to_string());
         }
         if lower.contains("list") || lower.contains("show all") {
+            let state = extract_after_keywords(&lower, &["list pr", "pr list", "list pull request"]);
+            if !state.is_empty() {
+                return CommandIntent::Pr(format!("list all github prs with state: {}", state));
+            }
             return CommandIntent::Pr("list all github prs".to_string());
         }
         if lower.contains("view") || lower.contains("show") {
@@ -695,12 +912,31 @@ fn match_command_keywords(content: &str) -> CommandIntent {
         }
         if lower.contains("merge") {
             if let Some(num) = extract_number(&lower) {
-                return CommandIntent::Pr(format!("merge github pr #{}", num));
+                return CommandIntent::Pr(format!("check ci status for pr #{} then merge github pr #{}", num, num));
             }
         }
         if lower.contains("close") {
             if let Some(num) = extract_number(&lower) {
                 return CommandIntent::Pr(format!("close github pr #{}", num));
+            }
+        }
+        if lower.contains("comment") {
+            if let Some(num) = extract_number(&lower) {
+                let comment_body = extract_after_keywords(&lower, &["comment on pr", "comment pr", "pr comment"]);
+                if !comment_body.is_empty() {
+                    return CommandIntent::Pr(format!("comment on github pr #{} with body: {}", num, comment_body));
+                }
+                return CommandIntent::Pr(format!("comment on github pr #{}", num));
+            }
+        }
+        if lower.contains("review") || lower.contains("approve") || lower.contains("reject") {
+            if let Some(num) = extract_number(&lower) {
+                if lower.contains("approve") {
+                    return CommandIntent::Pr(format!("approve pull request #{}", num));
+                } else if lower.contains("reject") {
+                    return CommandIntent::Pr(format!("reject pull request #{}", num));
+                }
+                return CommandIntent::Pr(format!("review pull request #{}", num));
             }
         }
     }
@@ -1078,8 +1314,8 @@ async fn help(
 ) -> std::result::Result<(), DiscordError> {
     if let Some(cmd) = command {
         let help_text = match cmd.as_str() {
-            "issue" => "**Issue Management**\n`/issue create` - create new issue\n`/issue list` - list all issues\n`/issue view <number>` - view issue details\n`/issue close <number>` - close issue (admin only)",
-            "pr" => "**PR Management**\n`/pr create` - create new pr\n`/pr list` - list all prs\n`/pr view <number>` - view pr details\n`/pr merge <number>` - merge pr (admin only)\n`/pr close <number>` - close pr (admin only)",
+            "issue" => "**Issue Management**\n`/issue create <title> [body]` - create new issue (member)\n`/issue list [label]` - list all issues (guest)\n`/issue view <number>` - view issue details (guest)\n`/issue close <number>` - close issue (member)\n`/issue comment <number> <body>` - comment on issue (member)\n`/issue assign <number> <user>` - assign issue (admin)",
+            "pr" => "**PR Management**\n`/pr create <title> [base] [head]` - create new pr (member)\n`/pr list [state]` - list prs (guest)\n`/pr view <number>` - view pr details (guest)\n`/pr merge <number>` - merge pr (admin only, checks CI)\n`/pr comment <number> <body>` - comment on pr (member)\n`/pr review <number> <approve|reject>` - code review (member)\n`/pr close <number>` - close pr (member)",
             "status" => "**CI Status**\n`/status [workflow]` - check ci status for workflow or overall",
             "release" => "**Release Management**\n`/release [version] create` - create release (admin only)\n`/release [version]` - view release\n`/release` - list all releases",
             "summarize" => "**Summarize**\n`/summarize <url|file> [length]` - summarize url or file\nlength: short|medium|long|xl|xxl",

@@ -113,6 +113,32 @@ pub struct FeishuConfig {
     pub bridge_url: Option<String>,
 }
 
+/// Discord channel configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DiscordConfig {
+    /// Whether Discord is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bot token from Discord Developer Portal
+    #[serde(default)]
+    pub token: String,
+    /// Application ID (Bot Application ID)
+    #[serde(default)]
+    pub application_id: u64,
+    /// Guild ID (optional, for guild-specific commands)
+    #[serde(default)]
+    pub guild_id: Option<u64>,
+    /// Allowed users/roles (user IDs or role IDs as strings)
+    #[serde(default)]
+    pub allow_from: Vec<String>,
+    /// Admin role list (role IDs as strings)
+    #[serde(default)]
+    pub admin_roles: Vec<String>,
+    /// Member role list (role IDs as strings, for granular permissions)
+    #[serde(default)]
+    pub member_roles: Vec<String>,
+}
+
 fn default_feishu_message_type() -> String {
     "text".to_string()
 }
@@ -123,29 +149,6 @@ fn default_feishu_dm_policy() -> String {
 
 fn default_feishu_group_policy() -> String {
     "open".to_string()
-}
-
-/// discord channel configuration
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DiscordConfig {
-    /// whether discord is enabled
-    #[serde(default)]
-    pub enabled: bool,
-    /// bot token from discord developer portal
-    #[serde(default)]
-    pub token: String,
-    /// application id (bot application id)
-    #[serde(default)]
-    pub application_id: u64,
-    /// guild id (optional, for guild-specific commands)
-    #[serde(default)]
-    pub guild_id: Option<u64>,
-    /// allowed users/roles (user ids or role ids as strings)
-    #[serde(default)]
-    pub allow_from: Vec<String>,
-    /// admin role list (role ids as strings)
-    #[serde(default)]
-    pub admin_roles: Vec<String>,
 }
 
 fn default_dm_policy() -> String {
@@ -160,7 +163,7 @@ fn default_message_type() -> String {
     "markdown".to_string()
 }
 
-/// configuration for chat channels
+/// Configuration for chat channels
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChannelsConfig {
     /// WhatsApp configuration
@@ -172,10 +175,10 @@ pub struct ChannelsConfig {
     /// DingTalk configuration
     #[serde(default)]
     pub dingtalk: DingTalkConfig,
-    /// feishu (lark) configuration
+    /// Feishu (Lark) configuration
     #[serde(default)]
     pub feishu: FeishuConfig,
-    /// discord configuration
+    /// Discord configuration
     #[serde(default)]
     pub discord: DiscordConfig,
 }
@@ -417,8 +420,6 @@ impl Config {
                     .clone()
                     .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string()),
             )
-        } else if !self.providers.anthropic.api_key.is_empty() {
-            self.providers.anthropic.api_base.clone()
         } else if !self.providers.zhipu.api_key.is_empty() {
             self.providers.zhipu.api_base.clone()
         } else if self.providers.vllm.api_base.is_some() {

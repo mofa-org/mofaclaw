@@ -5,10 +5,9 @@ use clap::{Parser, Subcommand};
 use console::Style;
 use mofa_sdk::{llm::LLMAgentBuilder, skills::SkillsManager};
 use mofaclaw_core::{
-    AgentLoop, ChannelManager, Config, ContextBuilder, DingTalkChannel, FeishuChannel,
-    HeartbeatService, MessageBus, SessionManager, SubagentManager, TelegramChannel, load_config,
-    provider::{OpenAIConfig, OpenAIProvider},
-    save_config,
+    channels::DiscordChannel, AgentLoop, ChannelManager, Config, ContextBuilder, DingTalkChannel,
+    FeishuChannel, HeartbeatService, MessageBus, SessionManager, SubagentManager, TelegramChannel,
+    load_config, provider::{OpenAIConfig, OpenAIProvider}, save_config,
     tools::{ToolRegistry, ToolRegistryExecutor},
 };
 use std::io::Write;
@@ -337,20 +336,20 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     // Create subagent manager from agent loop
     let subagent_manager = std::sync::Arc::new(SubagentManager::new(agent.clone()));
 
-    // Re-register spawn tool with the real subagent manager
+    // re-register spawn tool with the real subagent manager
     agent.register_spawn_tool(subagent_manager.clone()).await;
 
-    // Create channel manager
+    // create channel manager
     let channel_manager = ChannelManager::new(&config, bus.clone());
 
-    // Register DingTalk channel if enabled
+    // register dingtalk channel if enabled
     if config.channels.dingtalk.enabled {
         let dingtalk = DingTalkChannel::new(config.channels.dingtalk.clone(), bus.clone());
         channel_manager.register_channel(Arc::new(dingtalk)).await;
         println!("✅ DingTalk: enabled (via Python bridge on ws://localhost:3002)");
     }
 
-    // Register Telegram channel if enabled
+    // register telegram channel if enabled
     if config.channels.telegram.enabled {
         match TelegramChannel::new(config.channels.telegram.clone(), bus.clone()) {
             Ok(telegram) => {
@@ -363,11 +362,24 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
         }
     }
 
-    // Register Feishu channel if enabled
+    // register feishu channel if enabled
     if config.channels.feishu.enabled {
         let feishu = FeishuChannel::new(config.channels.feishu.clone(), bus.clone());
         channel_manager.register_channel(Arc::new(feishu)).await;
         println!("✅ Feishu: enabled (via Python bridge on ws://localhost:3004)");
+    }
+
+    // register discord channel if enabled
+    if config.channels.discord.enabled {
+        match DiscordChannel::new(config.channels.discord.clone(), bus.clone()) {
+            Ok(discord) => {
+                channel_manager.register_channel(Arc::new(discord)).await;
+                println!("✅ Discord: enabled");
+            }
+            Err(e) => {
+                println!("⚠️  Discord: failed to initialize: {}", e);
+            }
+        }
     }
 
     if channel_manager.has_enabled_channels() {

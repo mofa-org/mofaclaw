@@ -33,6 +33,7 @@ html-escape = "0.2"
 tempfile = "3.14"
 infer = "0.15"
 base64 = "0.22"
+glob = "0.3"
 
 # telegram
 teloxide = { workspace = true }

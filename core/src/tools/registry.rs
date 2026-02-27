@@ -139,7 +139,7 @@ impl mofa_sdk::llm::ToolExecutor for ToolRegistry {
         let params: HashMap<String, Value> = value
             .as_object()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_else(HashMap::new);
+            .unwrap_or_default();
 
         self.execute(name, &params)
             .await
@@ -180,7 +180,7 @@ impl mofa_sdk::llm::ToolExecutor for ToolRegistryExecutor {
         let params: HashMap<String, Value> = value
             .as_object()
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-            .unwrap_or_else(HashMap::new);
+            .unwrap_or_default();
 
         registry
             .execute(name, &params)

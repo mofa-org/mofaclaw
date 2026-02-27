@@ -1,0 +1,35 @@
+{
+  "rbac": {
+    "enabled": true,
+    "default_role": "guest",
+    "permissions": {
+      "tools": {
+        "filesystem": {
+          "write": {
+            "min_role": "member",
+            "path_whitelist": {
+              "member": ["${workspace}/**"]
+            },
+            "path_blacklist": [
+              "**/.env*",
+              "**/secrets/**",
+              "**/credentials*"
+            ]
+          }
+        },
+        "shell": {
+          "execute": {
+            "safe_commands": {
+              "min_role": "member",
+              "allowed": [
+                "git *",
+                "npm *",
+                "cargo *"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

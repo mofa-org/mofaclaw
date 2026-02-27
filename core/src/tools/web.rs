@@ -305,7 +305,12 @@ impl SimpleTool for WebFetchTool {
 use std::sync::LazyLock;
 
 static LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]+)</a>"#).unwrap());
-static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<h([1-6])[^>]*>([^<]+)</h\1>").unwrap());
+// NOTE: Rust's regex crate does not support backreferences like \1.
+// The original pattern used </h\1>, which caused a runtime regex parse error and
+// crashed the bot at startup. We instead explicitly match any closing h[1-6] tag.
+// We still use the captured opening level (group 1) to decide how many '#' to emit.
+static HEADING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<h([1-6])[^>]*>([^<]+)</h[1-6]>").unwrap());
 static BOLD1_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<strong[^>]*>([^<]+)</strong>").unwrap());
 static BOLD2_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<b[^>]*>([^<]+)</b>").unwrap());
 static ITALIC1_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<em[^>]*>([^<]+)</em>").unwrap());

@@ -183,17 +183,17 @@ fn is_heartbeat_empty(content: Option<&str>) -> bool {
         _ => return true,
     };
 
-    // Lines to skip: empty, headers, HTML comments, empty checkboxes
+    // Lines to skip: empty, headers, HTML comments, and checkbox lines
     let skip_patterns = ["- [ ]", "* [ ]", "- [x]", "* [x]"];
 
     for line in content.lines() {
         let line = line.trim();
 
-        // Skip empty lines, headers, HTML comments, and checkboxes
+        // Skip empty lines, headers, HTML comments, and checkbox items
         if line.is_empty()
             || line.starts_with('#')
             || line.starts_with("<!--")
-            || skip_patterns.iter().any(|&p| line == p)
+            || skip_patterns.iter().any(|&p| line.starts_with(p))
         {
             continue;
         }

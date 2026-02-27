@@ -182,7 +182,6 @@ impl SimpleTool for MessageTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_message_tool() {

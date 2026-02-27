@@ -80,8 +80,7 @@ impl SimpleTool for WebSearchTool {
         let count = input
             .get_number("count")
             .unwrap_or(self.max_results as f64)
-            .min(10.0)
-            .max(1.0) as usize;
+            .clamp(1.0, 10.0) as usize;
 
         let client = reqwest::Client::new();
         let response = match client

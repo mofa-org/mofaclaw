@@ -1,0 +1,23 @@
+{
+  "rbac": {
+    "enabled": true,
+    "default_role": "member",
+    "role_mappings": {
+      "discord": {
+        "admin_roles": ["Maintainer", "Core Team"],
+        "member_roles": ["Contributor", "@everyone"]
+      }
+    },
+    "permissions": {
+      "skills": {
+        "github": {
+          "operations": {
+            "issue.create": { "min_role": "member" },
+            "pr.create": { "min_role": "member" },
+            "pr.merge": { "min_role": "admin" }
+          }
+        }
+      }
+    }
+  }
+}

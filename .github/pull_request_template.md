@@ -68,10 +68,13 @@ If breaking:
 
 ### Code Quality
 - [ ] Code follows Rust idioms and project conventions
+ - [ ] `cargo fmt` run
+ - [ ] `cargo clippy --workspace --all-features` passes locally
 
 ### Testing
 - [ ] Tests added/updated
-- [ ] `cargo test` passes locally without any error
+ - [ ] `cargo test --workspace --all-features` passes locally
+ - [ ] `cargo build --examples` (if examples are present)
 
 ### Documentation
 - [ ] Public APIs documented

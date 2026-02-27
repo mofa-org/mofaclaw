@@ -14,6 +14,7 @@ pub mod error;
 pub mod heartbeat;
 pub mod messages;
 pub mod permissions;
+pub mod rbac;
 pub mod provider;
 pub mod python_env;
 pub mod session;

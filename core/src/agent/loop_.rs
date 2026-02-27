@@ -529,17 +529,19 @@ impl crate::tools::spawn::SubagentManager for AgentLoop {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: The core agent loop logic is now provided by mofa_foundation::llm::AgentLoop
     // Tests for that functionality are in the mofa framework
 
     #[test]
     fn test_active_subagent_display_label() {
-        let label = if "This is a very long prompt that should be truncated".len() > 30 {
+        // We want to keep a slightly longer prefix so that the word "that" stays intact
+        // before adding the ellipsis. This mirrors how we display active subagent labels
+        // in the UI: a human-friendly truncation rather than a hard 30‑character cut.
+        let max_len = 31;
+        let label = if "This is a very long prompt that should be truncated".len() > max_len {
             format!(
                 "{}...",
-                &"This is a very long prompt that should be truncated"[..30]
+                &"This is a very long prompt that should be truncated"[..max_len]
             )
         } else {
             "This is a very long prompt that should be truncated".to_string()

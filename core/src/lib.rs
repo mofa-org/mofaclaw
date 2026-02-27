@@ -13,6 +13,7 @@ pub mod cron;
 pub mod error;
 pub mod heartbeat;
 pub mod messages;
+pub mod permissions;
 pub mod provider;
 pub mod python_env;
 pub mod session;
@@ -32,6 +33,7 @@ pub use config::{
 pub use cron::{CronJob, CronPayload, CronSchedule, CronService};
 pub use error::*;
 pub use heartbeat::HeartbeatService;
+pub use permissions::{PermissionLevel, PermissionManager};
 pub use provider::{GroqTranscriptionProvider, TranscriptionProvider};
 pub use python_env::PythonEnv;
 pub use session::{

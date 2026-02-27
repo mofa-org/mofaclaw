@@ -8,6 +8,7 @@ use crate::config::DiscordConfig;
 use crate::error::{ChannelError, Result};
 use crate::get_workspace_path;
 use crate::messages::InboundMessage;
+use crate::permissions::{PermissionLevel, PermissionManager};
 use async_trait::async_trait;
 use poise::serenity_prelude as serenity;
 use std::sync::Arc;
@@ -28,6 +29,7 @@ pub struct DiscordChannel {
     bus: MessageBus,
     running: Arc<RwLock<bool>>,
     http: Arc<RwLock<Option<Arc<serenity::Http>>>>,
+    permissions: PermissionManager,
 }
 
 /// poise error type
@@ -85,11 +87,14 @@ impl DiscordChannel {
             return Err(ChannelError::NotConfigured("Discord".to_string()).into());
         }
 
+        let permissions = PermissionManager::from_discord_config(&config);
+
         Ok(Self {
             config,
             bus,
             running: Arc::new(RwLock::new(false)),
             http: Arc::new(RwLock::new(None)),
+            permissions,
         })
     }
 
@@ -108,20 +113,14 @@ impl DiscordChannel {
 
     /// check if user has admin role
     fn is_admin(&self, roles: &[String]) -> bool {
-        !self.config.admin_roles.is_empty()
-            && roles
-                .iter()
-                .any(|role| self.config.admin_roles.contains(role))
+        self.permissions
+            .has_level(roles, PermissionLevel::Admin)
     }
 
     /// check if user has member role (or admin role)
     fn is_member(&self, roles: &[String]) -> bool {
-        // members include both member_roles and admin_roles
-        self.is_admin(roles)
-            || (!self.config.member_roles.is_empty()
-                && roles
-                    .iter()
-                    .any(|role| self.config.member_roles.contains(role)))
+        self.permissions
+            .has_level(roles, PermissionLevel::Member)
     }
 
     /// check if user is guest (anyone can be a guest, but not restricted)
@@ -146,11 +145,15 @@ impl DiscordChannel {
 
     /// create channel instance from poise context
     fn from_context(ctx: &poise::Context<'_, Data, DiscordError>) -> Self {
+        let config = ctx.data().config.clone();
+        let permissions = PermissionManager::from_discord_config(&config);
+
         Self {
-            config: ctx.data().config.clone(),
+            config,
             bus: ctx.data().bus.clone(),
             running: Arc::new(RwLock::new(true)),
             http: Arc::new(RwLock::new(None)),
+            permissions,
         }
     }
 }
@@ -1683,12 +1686,14 @@ impl Channel for DiscordChannel {
                     Vec::new()
                 };
 
-                let channel = DiscordChannel {
-                    config: self.config.clone(),
-                    bus: self.bus.clone(),
-                    running: Arc::new(RwLock::new(true)),
-                    http: Arc::new(RwLock::new(None)),
-                };
+                let channel = DiscordChannel::new(self.config.clone(), self.bus.clone())
+                    .unwrap_or(DiscordChannel {
+                        config: self.config.clone(),
+                        bus: self.bus.clone(),
+                        running: Arc::new(RwLock::new(true)),
+                        http: Arc::new(RwLock::new(None)),
+                        permissions: PermissionManager::from_discord_config(&self.config),
+                    });
 
                 if !channel.is_allowed(&user_id, &roles) {
                     debug!("message from unauthorized user: {}", user_id);

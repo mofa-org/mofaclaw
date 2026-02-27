@@ -1,18 +1,34 @@
 //! File system tools: read, write, edit, list
 
 use super::base::{SimpleTool, ToolInput, ToolResult};
+use crate::rbac::{RbacManager, Role};
 use async_trait::async_trait;
 use mofa_sdk::agent::ToolCategory;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs;
 
 /// Tool to read file contents
-pub struct ReadFileTool;
+pub struct ReadFileTool {
+    rbac_manager: Option<Arc<RbacManager>>,
+    user_role: Option<Role>,
+}
 
 impl ReadFileTool {
     pub fn new() -> Self {
-        Self
+        Self {
+            rbac_manager: None,
+            user_role: None,
+        }
+    }
+
+    /// Create with RBAC manager and user role
+    pub fn with_rbac(rbac_manager: Arc<RbacManager>, user_role: Role) -> Self {
+        Self {
+            rbac_manager: Some(rbac_manager),
+            user_role: Some(user_role),
+        }
     }
 }
 
@@ -53,6 +69,16 @@ impl SimpleTool for ReadFileTool {
 
         let path = expand_tilde(Path::new(path));
 
+        // Check permissions if RBAC is enabled
+        if let (Some(rbac), Some(role)) = (&self.rbac_manager, &self.user_role) {
+            match rbac.check_path_access(*role, "read", &path) {
+                crate::rbac::manager::PermissionResult::Allowed => {}
+                crate::rbac::manager::PermissionResult::Denied(reason) => {
+                    return ToolResult::failure(format!("Permission denied: {}", reason));
+                }
+            }
+        }
+
         if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
             return ToolResult::failure(format!("Error: File not found: {}", path.display()));
         }
@@ -77,11 +103,25 @@ impl SimpleTool for ReadFileTool {
 }
 
 /// Tool to write content to a file
-pub struct WriteFileTool;
+pub struct WriteFileTool {
+    rbac_manager: Option<Arc<RbacManager>>,
+    user_role: Option<Role>,
+}
 
 impl WriteFileTool {
     pub fn new() -> Self {
-        Self
+        Self {
+            rbac_manager: None,
+            user_role: None,
+        }
+    }
+
+    /// Create with RBAC manager and user role
+    pub fn with_rbac(rbac_manager: Arc<RbacManager>, user_role: Role) -> Self {
+        Self {
+            rbac_manager: Some(rbac_manager),
+            user_role: Some(user_role),
+        }
     }
 }
 
@@ -131,6 +171,16 @@ impl SimpleTool for WriteFileTool {
 
         let path = expand_tilde(Path::new(path));
 
+        // Check permissions if RBAC is enabled
+        if let (Some(rbac), Some(role)) = (&self.rbac_manager, &self.user_role) {
+            match rbac.check_path_access(*role, "write", &path) {
+                crate::rbac::manager::PermissionResult::Allowed => {}
+                crate::rbac::manager::PermissionResult::Denied(reason) => {
+                    return ToolResult::failure(format!("Permission denied: {}", reason));
+                }
+            }
+        }
+
         // Create parent directories
         if let Some(parent) = path.parent()
             && let Err(e) = fs::create_dir_all(parent).await
@@ -154,11 +204,25 @@ impl SimpleTool for WriteFileTool {
 }
 
 /// Tool to edit a file by replacing text
-pub struct EditFileTool;
+pub struct EditFileTool {
+    rbac_manager: Option<Arc<RbacManager>>,
+    user_role: Option<Role>,
+}
 
 impl EditFileTool {
     pub fn new() -> Self {
-        Self
+        Self {
+            rbac_manager: None,
+            user_role: None,
+        }
+    }
+
+    /// Create with RBAC manager and user role
+    pub fn with_rbac(rbac_manager: Arc<RbacManager>, user_role: Role) -> Self {
+        Self {
+            rbac_manager: Some(rbac_manager),
+            user_role: Some(user_role),
+        }
     }
 }
 
@@ -217,6 +281,16 @@ impl SimpleTool for EditFileTool {
 
         let path = expand_tilde(Path::new(path));
 
+        // Check permissions if RBAC is enabled
+        if let (Some(rbac), Some(role)) = (&self.rbac_manager, &self.user_role) {
+            match rbac.check_path_access(*role, "write", &path) {
+                crate::rbac::manager::PermissionResult::Allowed => {}
+                crate::rbac::manager::PermissionResult::Denied(reason) => {
+                    return ToolResult::failure(format!("Permission denied: {}", reason));
+                }
+            }
+        }
+
         if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
             return ToolResult::failure(format!("Error: File not found: {}", path.display()));
         }
@@ -254,11 +328,25 @@ impl SimpleTool for EditFileTool {
 }
 
 /// Tool to list directory contents
-pub struct ListDirTool;
+pub struct ListDirTool {
+    rbac_manager: Option<Arc<RbacManager>>,
+    user_role: Option<Role>,
+}
 
 impl ListDirTool {
     pub fn new() -> Self {
-        Self
+        Self {
+            rbac_manager: None,
+            user_role: None,
+        }
+    }
+
+    /// Create with RBAC manager and user role
+    pub fn with_rbac(rbac_manager: Arc<RbacManager>, user_role: Role) -> Self {
+        Self {
+            rbac_manager: Some(rbac_manager),
+            user_role: Some(user_role),
+        }
     }
 }
 
@@ -298,6 +386,16 @@ impl SimpleTool for ListDirTool {
         };
 
         let path = expand_tilde(Path::new(path));
+
+        // Check permissions if RBAC is enabled
+        if let (Some(rbac), Some(role)) = (&self.rbac_manager, &self.user_role) {
+            match rbac.check_path_access(*role, "read", &path) {
+                crate::rbac::manager::PermissionResult::Allowed => {}
+                crate::rbac::manager::PermissionResult::Denied(reason) => {
+                    return ToolResult::failure(format!("Permission denied: {}", reason));
+                }
+            }
+        }
 
         if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
             return ToolResult::failure(format!("Error: Directory not found: {}", path.display()));
@@ -343,7 +441,7 @@ impl SimpleTool for ListDirTool {
                     .unwrap_or(false)
             };
 
-            let prefix = if is_dir { "📁 " } else { "📄 " };
+            let prefix = if is_dir { "[dir] " } else { "[file] " };
             items.push(format!("{}{}", prefix, name));
         }
 

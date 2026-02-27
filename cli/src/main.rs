@@ -374,15 +374,11 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     }
 
     // Initialize RBAC manager if configured
-    let rbac_manager = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
+    let rbac_manager: Option<Arc<RbacManager>> = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
         if rbac_config.enabled {
             let workspace = config.workspace_path();
             let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            Some(Arc::new(crate::rbac::RbacManager::new(
-                rbac_config,
-                workspace,
-                home,
-            )))
+            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
         } else {
             None
         }

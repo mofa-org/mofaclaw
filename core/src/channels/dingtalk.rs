@@ -656,10 +656,10 @@ impl Channel for DingTalkChannel {
                                             } else if msg_type == "send_result" {
                                                 let success = data.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
                                                 if success {
-                                                    info!("✅ 消息已发送到钉钉");
+                                                    info!("Message sent to DingTalk");
                                                 } else {
                                                     let error_msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
-                                                    warn!("❌ 发送钉钉消息失败: {}", error_msg);
+                                                    warn!("Failed to send DingTalk message: {}", error_msg);
                                                 }
                                             }
                                         }

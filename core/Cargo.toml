@@ -27,11 +27,11 @@ path-clean = { workspace = true }
 readability = { workspace = true }
 html2md = { workspace = true }
 dotenvy = { workspace = true }
-regex = "1.11"
-which = "7.0"
+regex = "1.12"
+which = "8.0"
 html-escape = "0.2"
-tempfile = "3.14"
-infer = "0.15"
+tempfile = "3.26"
+infer = "0.16"
 base64 = "0.22"
 glob = "0.3"
 

@@ -1,0 +1,23 @@
+{
+  "rbac": {
+    "enabled": true,
+    "role_mappings": {
+      "discord": {
+        "admin_roles": ["CI/CD Bot", "Automation"],
+        "user_overrides": {
+          "CI_BOT_USER_ID": "admin"
+        }
+      }
+    },
+    "permissions": {
+      "skills": {
+        "github": {
+          "operations": {
+            "pr.merge": { "min_role": "admin" },
+            "workflow.run": { "min_role": "admin" }
+          }
+        }
+      }
+    }
+  }
+}

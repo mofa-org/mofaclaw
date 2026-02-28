@@ -43,56 +43,54 @@ impl ContextBuilder {
         let mut builtin_skills = SkillsManager::find_builtin_skills();
 
         // Fallback: try to find skills directory relative to the executable or CARGO_MANIFEST_DIR
-        if builtin_skills.is_none() {
-            // First try: CARGO_MANIFEST_DIR/../skills (for workspace projects)
-            if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-                let manifest_path = std::path::PathBuf::from(&manifest_dir);
-                // Try ../skills (cli/../skills -> project/skills)
-                let skills_path = manifest_path.join("../skills");
+        if builtin_skills.is_none()
+            && let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR")
+        {
+            let manifest_path = std::path::PathBuf::from(&manifest_dir);
+            // Try ../skills (cli/../skills -> project/skills)
+            let skills_path = manifest_path.join("../skills");
+            if skills_path.exists() {
+                builtin_skills = Some(skills_path);
+            }
+            // Try ../../skills (for deeper nesting)
+            if builtin_skills.is_none() {
+                let skills_path = manifest_path.join("../../skills");
                 if skills_path.exists() {
                     builtin_skills = Some(skills_path);
                 }
-                // Try ../../skills (for deeper nesting)
-                if builtin_skills.is_none() {
-                    let skills_path = manifest_path.join("../../skills");
-                    if skills_path.exists() {
-                        builtin_skills = Some(skills_path);
-                    }
+            }
+        }
+
+        // Second try: relative to executable
+        if builtin_skills.is_none()
+            && let Ok(exe) = std::env::current_exe()
+        {
+            // Try exe parent/skills (development build)
+            if let Some(parent) = exe.parent() {
+                let skills_path = parent.join("skills");
+                if skills_path.exists() {
+                    builtin_skills = Some(skills_path);
                 }
             }
-
-            // Second try: relative to executable
-            if builtin_skills.is_none() {
-                if let Ok(exe) = std::env::current_exe() {
-                    // Try exe parent/skills (development build)
-                    if let Some(parent) = exe.parent() {
-                        let skills_path = parent.join("skills");
-                        if skills_path.exists() {
-                            builtin_skills = Some(skills_path);
-                        }
-                    }
-                    // Try exe parent/../skills (for target/debug/mofaclaw -> target/skills)
-                    if builtin_skills.is_none() {
-                        if let Some(parent) = exe.parent().and_then(|p| p.parent()) {
-                            let skills_path = parent.join("skills");
-                            if skills_path.exists() {
-                                builtin_skills = Some(skills_path);
-                            }
-                        }
-                    }
-                    // Try exe parent/../..skills (for target/debug/mofaclaw -> project/skills)
-                    if builtin_skills.is_none() {
-                        if let Some(parent) = exe
-                            .parent()
-                            .and_then(|p| p.parent())
-                            .and_then(|p| p.parent())
-                        {
-                            let skills_path = parent.join("skills");
-                            if skills_path.exists() {
-                                builtin_skills = Some(skills_path);
-                            }
-                        }
-                    }
+            // Try exe parent/../skills (for target/debug/mofaclaw -> target/skills)
+            if builtin_skills.is_none()
+                && let Some(parent) = exe.parent().and_then(|p| p.parent())
+            {
+                let skills_path = parent.join("skills");
+                if skills_path.exists() {
+                    builtin_skills = Some(skills_path);
+                }
+            }
+            // Try exe parent/../../skills (for target/debug/mofaclaw -> project/skills)
+            if builtin_skills.is_none()
+                && let Some(parent) = exe
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .and_then(|p| p.parent())
+            {
+                let skills_path = parent.join("skills");
+                if skills_path.exists() {
+                    builtin_skills = Some(skills_path);
                 }
             }
         }

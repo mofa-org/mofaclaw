@@ -706,13 +706,13 @@ impl Channel for FeishuChannel {
                                             } else if msg_type == "send_result" {
                                                 let success = data.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
                                                 if success {
-                                                    info!("✅ 消息已发送到飞书");
+                                                    info!("Message sent to Feishu");
                                                 } else {
                                                     let error_msg = data.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
-                                                    warn!("❌ 发送飞书消息失败: {}", error_msg);
+                                                    warn!("Failed to send Feishu message: {}", error_msg);
                                                 }
                                             } else if msg_type == "connected" {
-                                                info!("✅ 飞书 Python 桥接已连接");
+                                                info!("Feishu Python bridge connected");
                                             }
                                         }
                                     }

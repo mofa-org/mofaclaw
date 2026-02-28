@@ -1,0 +1,123 @@
+{
+  "rbac": {
+    "enabled": true,
+    "default_role": "guest",
+    "roles": {
+      "guest": {
+        "level": 0,
+        "description": "Read-only access, no write operations"
+      },
+      "member": {
+        "level": 1,
+        "description": "Limited write access to workspace only"
+      },
+      "admin": {
+        "level": 2,
+        "description": "Full access except destructive operations"
+      },
+      "superadmin": {
+        "level": 3,
+        "description": "Unrestricted system-level access"
+      }
+    },
+    "role_mappings": {
+      "discord": {
+        "superadmin_roles": ["Owner", "Bot Admin", "System Admin"],
+        "admin_roles": ["Admin", "Moderator", "Team Lead"],
+        "member_roles": ["Member", "Contributor", "Developer"],
+        "guest_roles": ["@everyone", "Viewer"],
+        "user_overrides": {}
+      }
+    },
+    "permissions": {
+      "skills": {
+        "github": {
+          "operations": {
+            "repo.view": { "min_role": "guest" },
+            "repo.create": { "min_role": "superadmin" },
+            "repo.delete": { "min_role": "superadmin" },
+            "issue.list": { "min_role": "guest" },
+            "issue.view": { "min_role": "guest" },
+            "issue.create": { "min_role": "member" },
+            "issue.close": { "min_role": "admin" },
+            "issue.comment": { "min_role": "member" },
+            "issue.assign": { "min_role": "admin" },
+            "pr.create": { "min_role": "member" },
+            "pr.view": { "min_role": "guest" },
+            "pr.merge": { "min_role": "admin" },
+            "pr.close": { "min_role": "admin" },
+            "workflow.run": { "min_role": "admin" },
+            "secret.set": { "min_role": "superadmin" },
+            "secret.delete": { "min_role": "superadmin" }
+          }
+        }
+      },
+      "tools": {
+        "filesystem": {
+          "read": {
+            "min_role": "guest",
+            "path_whitelist": {
+              "guest": ["${workspace}/**"],
+              "member": ["${workspace}/**"],
+              "admin": ["${workspace}/**", "${home}/**"]
+            }
+          },
+          "write": {
+            "min_role": "member",
+            "path_whitelist": {
+              "member": ["${workspace}/**"],
+              "admin": ["${workspace}/**", "${home}/projects/**"]
+            },
+            "path_blacklist": [
+              "**/.env",
+              "**/.env.*",
+              "**/credentials*",
+              "**/secrets/**",
+              "**/*.key",
+              "**/*.pem",
+              "**/*.p12",
+              "**/id_rsa*",
+              "**/.ssh/**"
+            ]
+          },
+          "delete": {
+            "min_role": "admin",
+            "path_whitelist": {
+              "admin": ["${workspace}/tmp/**", "${workspace}/.cache/**"]
+            },
+            "path_blacklist": [
+              "**/.env*",
+              "**/credentials*",
+              "**/secrets/**"
+            ]
+          }
+        },
+        "shell": {
+          "execute": {
+            "safe_commands": {
+              "min_role": "member",
+              "allowed": [
+                "ls",
+                "cat",
+                "pwd",
+                "git status",
+                "git log",
+                "git diff",
+                "gh * view",
+                "gh * list",
+                "gh * status",
+                "curl *",
+                "wget *"
+              ]
+            },
+            "full_access": { "min_role": "superadmin" }
+          }
+        },
+        "web": {
+          "fetch": { "min_role": "guest" },
+          "search": { "min_role": "guest" }
+        }
+      }
+    }
+  }
+}

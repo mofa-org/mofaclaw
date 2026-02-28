@@ -4,6 +4,7 @@
 //! It mirrors the Python config/schema.py structure.
 
 use crate::error::{ConfigError, Result};
+use crate::rbac::config::RbacConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::fs;
@@ -368,6 +369,9 @@ pub struct Config {
     /// Tools configuration
     #[serde(default)]
     pub tools: ToolsConfig,
+    /// RBAC configuration
+    #[serde(default)]
+    pub rbac: Option<RbacConfig>,
 }
 
 impl Config {
@@ -442,6 +446,17 @@ impl Config {
             Some(self.providers.groq.api_key.clone())
         } else {
             std::env::var("GROQ_API_KEY").ok()
+        }
+    }
+
+    /// Get RBAC config, validating it if present
+    pub fn get_rbac_config(&self) -> Result<Option<RbacConfig>> {
+        if let Some(ref rbac) = self.rbac {
+            rbac.validate()
+                .map_err(|e| ConfigError::Parse(format!("Invalid RBAC configuration: {}", e)))?;
+            Ok(Some(rbac.clone()))
+        } else {
+            Ok(None)
         }
     }
 }

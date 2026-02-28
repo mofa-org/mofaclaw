@@ -2739,6 +2739,7 @@ dependencies = [
  "dirs 5.0.1",
  "dotenvy",
  "futures-util",
+ "glob",
  "html-escape",
  "html2md",
  "infer 0.15.0",

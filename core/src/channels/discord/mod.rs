@@ -9,6 +9,7 @@ use crate::error::{ChannelError, Result};
 use crate::get_workspace_path;
 use crate::messages::InboundMessage;
 use crate::permissions::{PermissionLevel, PermissionManager};
+use crate::rbac::{RbacManager, Role};
 use async_trait::async_trait;
 use poise::serenity_prelude as serenity;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ pub struct DiscordChannel {
     running: Arc<RwLock<bool>>,
     http: Arc<RwLock<Option<Arc<serenity::Http>>>>,
     permissions: PermissionManager,
+    rbac_manager: Option<Arc<RbacManager>>,
 }
 
 /// poise error type
@@ -83,6 +85,15 @@ pub enum PrReviewAction {
 impl DiscordChannel {
     /// create new discord channel
     pub fn new(config: DiscordConfig, bus: MessageBus) -> Result<Self> {
+        Self::with_rbac(config, bus, None)
+    }
+
+    /// create new discord channel with RBAC manager
+    pub fn with_rbac(
+        config: DiscordConfig,
+        bus: MessageBus,
+        rbac_manager: Option<Arc<RbacManager>>,
+    ) -> Result<Self> {
         if config.token.is_empty() {
             return Err(ChannelError::NotConfigured("Discord".to_string()).into());
         }
@@ -95,6 +106,7 @@ impl DiscordChannel {
             running: Arc::new(RwLock::new(false)),
             http: Arc::new(RwLock::new(None)),
             permissions,
+            rbac_manager,
         })
     }
 
@@ -152,8 +164,21 @@ impl DiscordChannel {
             running: Arc::new(RwLock::new(true)),
             http: Arc::new(RwLock::new(None)),
             permissions,
+            rbac_manager: None, // Will be set if RBAC is configured
         }
     }
+
+    /// Resolve user role using RBAC if enabled, otherwise fallback to old system
+    fn resolve_user_role(&self, user_id: &str, discord_roles: &[String]) -> Role {
+        if let Some(ref rbac) = self.rbac_manager {
+            rbac.get_role_from_discord(user_id, discord_roles)
+        } else {
+            // Fallback to old permission system
+            let level = self.permissions.level_for(discord_roles);
+            Role::from(level)
+        }
+    }
+
 }
 
 /// issue management command
@@ -179,13 +204,26 @@ async fn issue(
     let roles = DiscordChannel::get_user_roles(ctx.guild_id(), ctx.http(), ctx.author().id).await;
     let channel = DiscordChannel::from_context(&ctx);
 
+    let user_role = channel.resolve_user_role(&user_id, &roles);
+
     let request = match action {
         IssueAction::Create => {
-            // Create requires Member permission
-            if !channel.is_member(&roles) {
-                ctx.say("error: create operation requires member role")
-                    .await?;
-                return Ok(());
+            // Check permission using RBAC if enabled
+            if let Some(ref rbac) = channel.rbac_manager {
+                match rbac.check_permission(user_role, "skills.github", "issue.create") {
+                    crate::rbac::manager::PermissionResult::Allowed => {}
+                    crate::rbac::manager::PermissionResult::Denied(reason) => {
+                        ctx.say(format!("error: {}", reason)).await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Fallback to old permission check
+                if !channel.is_member(&roles) {
+                    ctx.say("error: create operation requires member role")
+                        .await?;
+                    return Ok(());
+                }
             }
             if let Some(t) = title {
                 let mut req = format!("create a github issue with title: {}", t);
@@ -199,11 +237,22 @@ async fn issue(
             }
         }
         IssueAction::List => {
-            // List requires Guest permission (everyone can list)
-            if !channel.is_guest(&roles) {
-                ctx.say("error: list operation requires guest permission")
-                    .await?;
-                return Ok(());
+            // Check permission using RBAC if enabled
+            if let Some(ref rbac) = channel.rbac_manager {
+                match rbac.check_permission(user_role, "skills.github", "issue.list") {
+                    crate::rbac::manager::PermissionResult::Allowed => {}
+                    crate::rbac::manager::PermissionResult::Denied(reason) => {
+                        ctx.say(format!("error: {}", reason)).await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Fallback to old permission check
+                if !channel.is_guest(&roles) {
+                    ctx.say("error: list operation requires guest permission")
+                        .await?;
+                    return Ok(());
+                }
             }
             let mut req = "list all github issues".to_string();
             if let Some(l) = label {
@@ -212,11 +261,22 @@ async fn issue(
             req
         }
         IssueAction::View => {
-            // View requires Guest permission (everyone can view)
-            if !channel.is_guest(&roles) {
-                ctx.say("error: view operation requires guest permission")
-                    .await?;
-                return Ok(());
+            // Check permission using RBAC if enabled
+            if let Some(ref rbac) = channel.rbac_manager {
+                match rbac.check_permission(user_role, "skills.github", "issue.view") {
+                    crate::rbac::manager::PermissionResult::Allowed => {}
+                    crate::rbac::manager::PermissionResult::Denied(reason) => {
+                        ctx.say(format!("error: {}", reason)).await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Fallback to old permission check
+                if !channel.is_guest(&roles) {
+                    ctx.say("error: view operation requires guest permission")
+                        .await?;
+                    return Ok(());
+                }
             }
             if let Some(n) = number {
                 format!("view github issue #{}", n)
@@ -226,11 +286,22 @@ async fn issue(
             }
         }
         IssueAction::Close => {
-            // Close requires Member permission
-            if !channel.is_member(&roles) {
-                ctx.say("error: close operation requires member role")
-                    .await?;
-                return Ok(());
+            // Check permission using RBAC if enabled
+            if let Some(ref rbac) = channel.rbac_manager {
+                match rbac.check_permission(user_role, "skills.github", "issue.close") {
+                    crate::rbac::manager::PermissionResult::Allowed => {}
+                    crate::rbac::manager::PermissionResult::Denied(reason) => {
+                        ctx.say(format!("error: {}", reason)).await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Fallback to old permission check
+                if !channel.is_member(&roles) {
+                    ctx.say("error: close operation requires member role")
+                        .await?;
+                    return Ok(());
+                }
             }
             if let Some(n) = number {
                 format!("close github issue #{}", n)
@@ -240,11 +311,22 @@ async fn issue(
             }
         }
         IssueAction::Comment => {
-            // Comment requires Member permission
-            if !channel.is_member(&roles) {
-                ctx.say("error: comment operation requires member role")
-                    .await?;
-                return Ok(());
+            // Check permission using RBAC if enabled
+            if let Some(ref rbac) = channel.rbac_manager {
+                match rbac.check_permission(user_role, "skills.github", "issue.comment") {
+                    crate::rbac::manager::PermissionResult::Allowed => {}
+                    crate::rbac::manager::PermissionResult::Denied(reason) => {
+                        ctx.say(format!("error: {}", reason)).await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Fallback to old permission check
+                if !channel.is_member(&roles) {
+                    ctx.say("error: comment operation requires member role")
+                        .await?;
+                    return Ok(());
+                }
             }
             if let Some(n) = number {
                 if let Some(c) = comment {
@@ -259,11 +341,22 @@ async fn issue(
             }
         }
         IssueAction::Assign => {
-            // Assign requires Admin permission
-            if !channel.is_admin(&roles) {
-                ctx.say("error: assign operation requires admin role")
-                    .await?;
-                return Ok(());
+            // Check permission using RBAC if enabled
+            if let Some(ref rbac) = channel.rbac_manager {
+                match rbac.check_permission(user_role, "skills.github", "issue.assign") {
+                    crate::rbac::manager::PermissionResult::Allowed => {}
+                    crate::rbac::manager::PermissionResult::Denied(reason) => {
+                        ctx.say(format!("error: {}", reason)).await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Fallback to old permission check
+                if !channel.is_admin(&roles) {
+                    ctx.say("error: assign operation requires admin role")
+                        .await?;
+                    return Ok(());
+                }
             }
             if let Some(n) = number {
                 if let Some(github_username) = assignee {
@@ -336,14 +429,26 @@ async fn pr(
 
     let roles = DiscordChannel::get_user_roles(ctx.guild_id(), ctx.http(), ctx.author().id).await;
     let channel = DiscordChannel::from_context(&ctx);
+    let user_role = channel.resolve_user_role(&user_id, &roles);
 
     let request = match action {
         PrAction::Create => {
-            // Create requires Member permission
-            if !channel.is_member(&roles) {
-                ctx.say("error: create operation requires member role")
-                    .await?;
-                return Ok(());
+            // Check permission using RBAC if enabled
+            if let Some(ref rbac) = channel.rbac_manager {
+                match rbac.check_permission(user_role, "skills.github", "pr.create") {
+                    crate::rbac::manager::PermissionResult::Allowed => {}
+                    crate::rbac::manager::PermissionResult::Denied(reason) => {
+                        ctx.say(format!("error: {}", reason)).await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Fallback to old permission check
+                if !channel.is_member(&roles) {
+                    ctx.say("error: create operation requires member role")
+                        .await?;
+                    return Ok(());
+                }
             }
             if let Some(t) = title {
                 let mut req = format!("create a pull request with title: {}", t);
@@ -387,11 +492,22 @@ async fn pr(
             }
         }
         PrAction::Merge => {
-            // Merge requires Admin permission
-            if !channel.is_admin(&roles) {
-                ctx.say("error: merge operation requires admin role")
-                    .await?;
-                return Ok(());
+            // Check permission using RBAC if enabled
+            if let Some(ref rbac) = channel.rbac_manager {
+                match rbac.check_permission(user_role, "skills.github", "pr.merge") {
+                    crate::rbac::manager::PermissionResult::Allowed => {}
+                    crate::rbac::manager::PermissionResult::Denied(reason) => {
+                        ctx.say(format!("error: {}", reason)).await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                // Fallback to old permission check
+                if !channel.is_admin(&roles) {
+                    ctx.say("error: merge operation requires admin role")
+                        .await?;
+                    return Ok(());
+                }
             }
             if let Some(n) = number {
                 // Interactive confirmation before destructive merge (closes #27)
@@ -1748,6 +1864,7 @@ impl Channel for DiscordChannel {
                         running: Arc::new(RwLock::new(true)),
                         http: Arc::new(RwLock::new(None)),
                         permissions: PermissionManager::from_discord_config(&self.config),
+                        rbac_manager: None,
                     },
                 );
 

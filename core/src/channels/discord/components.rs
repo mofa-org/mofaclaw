@@ -1,6 +1,6 @@
 //! Reusable Discord interactive UI components.
 //!
-//! Provides a `confirm()` helper that presents a ✅ Confirm / ❌ Cancel button
+//! Provides a `confirm()` helper that presents a Confirm / Cancel button
 //! pair to the invoking user and returns `true` only when Confirm is clicked.
 //!
 //! # Usage
@@ -30,7 +30,7 @@ type Context<'a> = poise::Context<'a, Data, DiscordError>;
 /// How long (in seconds) the confirmation buttons remain active.
 const CONFIRM_TIMEOUT_SECS: u64 = 30;
 
-/// Present a ✅ Confirm / ❌ Cancel button pair and await the invoker's choice.
+/// Present a Confirm / Cancel button pair and await the invoker's choice.
 ///
 /// Returns `Ok(true)` when the user clicks **Confirm**, `Ok(false)` when they
 /// click **Cancel** or the 30-second window expires.
@@ -43,10 +43,10 @@ pub async fn confirm(ctx: &Context<'_>, prompt: &str) -> Result<bool, DiscordErr
 
     let components = vec![CreateActionRow::Buttons(vec![
         CreateButton::new(&confirm_id)
-            .label("✅ Confirm")
+            .label("Confirm")
             .style(ButtonStyle::Success),
         CreateButton::new(&cancel_id)
-            .label("❌ Cancel")
+            .label("Cancel")
             .style(ButtonStyle::Danger),
     ])];
 
@@ -54,7 +54,7 @@ pub async fn confirm(ctx: &Context<'_>, prompt: &str) -> Result<bool, DiscordErr
     let reply = ctx
         .send(
             poise::CreateReply::default()
-                .content(format!("⚠️ **{}**", prompt))
+                .content(format!("Warning: **{}**", prompt))
                 .components(components)
                 .ephemeral(true),
         )
@@ -73,9 +73,9 @@ pub async fn confirm(ctx: &Context<'_>, prompt: &str) -> Result<bool, DiscordErr
         Some(interaction) => {
             let confirmed = interaction.data.custom_id == confirm_id;
             let status_text = if confirmed {
-                "✅ **Confirmed.** Proceeding…"
+                "Confirmed. Proceeding…"
             } else {
-                "❌ **Cancelled.** No action was taken."
+                "Cancelled. No action was taken."
             };
             interaction
                 .create_response(

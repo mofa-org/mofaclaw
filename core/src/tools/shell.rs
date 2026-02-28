@@ -1,10 +1,12 @@
 //! Shell execution tool
 
 use super::base::{SimpleTool, ToolInput, ToolResult};
+use crate::rbac::{RbacManager, Role};
 use async_trait::async_trait;
 use mofa_sdk::agent::ToolCategory;
 use serde_json::{Value, json};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -15,6 +17,10 @@ pub struct ExecTool {
     timeout: u64,
     /// Default working directory
     working_dir: Option<String>,
+    /// RBAC manager for permission checks
+    rbac_manager: Option<Arc<RbacManager>>,
+    /// User role for permission checks
+    user_role: Option<Role>,
 }
 
 impl ExecTool {
@@ -23,6 +29,8 @@ impl ExecTool {
         Self {
             timeout: 60,
             working_dir: None,
+            rbac_manager: None,
+            user_role: None,
         }
     }
 
@@ -31,6 +39,8 @@ impl ExecTool {
         Self {
             timeout,
             working_dir: None,
+            rbac_manager: None,
+            user_role: None,
         }
     }
 
@@ -39,6 +49,18 @@ impl ExecTool {
         Self {
             timeout: 60,
             working_dir: Some(working_dir.into()),
+            rbac_manager: None,
+            user_role: None,
+        }
+    }
+
+    /// Create with RBAC manager and user role
+    pub fn with_rbac(rbac_manager: Arc<RbacManager>, user_role: Role) -> Self {
+        Self {
+            timeout: 60,
+            working_dir: None,
+            rbac_manager: Some(rbac_manager),
+            user_role: Some(user_role),
         }
     }
 
@@ -53,6 +75,8 @@ impl Default for ExecTool {
         Self {
             timeout: 60,
             working_dir: None,
+            rbac_manager: None,
+            user_role: None,
         }
     }
 }
@@ -92,9 +116,19 @@ impl SimpleTool for ExecTool {
 
         let working_dir = input.get_str("working_dir").or(self.working_dir.as_deref());
 
-        // Check for dangerous commands (basic security)
-        if is_dangerous_command(command) {
-            return ToolResult::failure("Error: Command blocked for security reasons.");
+        // Check permissions if RBAC is enabled
+        if let (Some(rbac), Some(role)) = (&self.rbac_manager, &self.user_role) {
+            match rbac.check_command_access(*role, command) {
+                crate::rbac::manager::PermissionResult::Allowed => {}
+                crate::rbac::manager::PermissionResult::Denied(reason) => {
+                    return ToolResult::failure(format!("Permission denied: {}", reason));
+                }
+            }
+        } else {
+            // Fallback to basic security check if RBAC not enabled
+            if is_dangerous_command(command) {
+                return ToolResult::failure("Error: Command blocked for security reasons.");
+            }
         }
 
         let cwd = if let Some(dir) = working_dir {

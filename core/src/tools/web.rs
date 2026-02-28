@@ -1,11 +1,13 @@
 //! Web tools: web_search and web_fetch
 
 use super::base::{SimpleTool, ToolInput, ToolResult};
+use crate::rbac::{RbacManager, Role};
 use async_trait::async_trait;
 use mofa_sdk::agent::ToolCategory;
 use regex::Regex;
 use serde_json::{Value, json};
 use std::env;
+use std::sync::Arc;
 
 // For readability extraction
 use readability::extractor;
@@ -17,6 +19,8 @@ const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWe
 pub struct WebSearchTool {
     api_key: Option<String>,
     max_results: usize,
+    rbac_manager: Option<Arc<RbacManager>>,
+    user_role: Option<Role>,
 }
 
 impl WebSearchTool {
@@ -25,6 +29,8 @@ impl WebSearchTool {
         Self {
             api_key: api_key.or_else(|| env::var("BRAVE_API_KEY").ok()),
             max_results: 5,
+            rbac_manager: None,
+            user_role: None,
         }
     }
 
@@ -33,6 +39,18 @@ impl WebSearchTool {
         Self {
             api_key: api_key.or_else(|| env::var("BRAVE_API_KEY").ok()),
             max_results: max_results.min(10),
+            rbac_manager: None,
+            user_role: None,
+        }
+    }
+
+    /// Create with RBAC manager and user role
+    pub fn with_rbac(rbac_manager: Arc<RbacManager>, user_role: Role) -> Self {
+        Self {
+            api_key: env::var("BRAVE_API_KEY").ok(),
+            max_results: 5,
+            rbac_manager: Some(rbac_manager),
+            user_role: Some(user_role),
         }
     }
 }
@@ -67,6 +85,16 @@ impl SimpleTool for WebSearchTool {
     }
 
     async fn execute(&self, input: ToolInput) -> ToolResult {
+        // Check permissions if RBAC is enabled
+        if let (Some(rbac), Some(role)) = (&self.rbac_manager, &self.user_role) {
+            match rbac.check_permission(*role, "tools.web", "search") {
+                crate::rbac::manager::PermissionResult::Allowed => {}
+                crate::rbac::manager::PermissionResult::Denied(reason) => {
+                    return ToolResult::failure(format!("Permission denied: {}", reason));
+                }
+            }
+        }
+
         let api_key = match self.api_key.as_ref() {
             Some(key) => key,
             None => return ToolResult::failure("Error: BRAVE_API_KEY not configured"),
@@ -136,23 +164,46 @@ impl SimpleTool for WebSearchTool {
 /// Tool to fetch and extract content from a URL
 pub struct WebFetchTool {
     max_chars: usize,
+    rbac_manager: Option<Arc<RbacManager>>,
+    user_role: Option<Role>,
 }
 
 impl WebFetchTool {
     /// Create a new WebFetchTool
     pub fn new() -> Self {
-        Self { max_chars: 50000 }
+        Self {
+            max_chars: 50000,
+            rbac_manager: None,
+            user_role: None,
+        }
     }
 
     /// Create with custom max characters
     pub fn with_max_chars(max_chars: usize) -> Self {
-        Self { max_chars }
+        Self {
+            max_chars,
+            rbac_manager: None,
+            user_role: None,
+        }
+    }
+
+    /// Create with RBAC manager and user role
+    pub fn with_rbac(rbac_manager: Arc<RbacManager>, user_role: Role) -> Self {
+        Self {
+            max_chars: 50000,
+            rbac_manager: Some(rbac_manager),
+            user_role: Some(user_role),
+        }
     }
 }
 
 impl Default for WebFetchTool {
     fn default() -> Self {
-        Self { max_chars: 50000 }
+        Self {
+            max_chars: 50000,
+            rbac_manager: None,
+            user_role: None,
+        }
     }
 }
 
@@ -189,6 +240,16 @@ impl SimpleTool for WebFetchTool {
     }
 
     async fn execute(&self, input: ToolInput) -> ToolResult {
+        // Check permissions if RBAC is enabled
+        if let (Some(rbac), Some(role)) = (&self.rbac_manager, &self.user_role) {
+            match rbac.check_permission(*role, "tools.web", "fetch") {
+                crate::rbac::manager::PermissionResult::Allowed => {}
+                crate::rbac::manager::PermissionResult::Denied(reason) => {
+                    return ToolResult::failure(format!("Permission denied: {}", reason));
+                }
+            }
+        }
+
         let url = match input.get_str("url") {
             Some(u) => u,
             None => return ToolResult::failure("Missing 'url' parameter"),

@@ -285,13 +285,13 @@ fn encode_message_content(content: Option<&MessageContent>) -> String {
 }
 
 fn decode_message_content(content: &str) -> Option<MessageContent> {
-    if let Some(payload) = content.strip_prefix(STRUCTURED_CONTENT_PREFIX) {
-        if let Ok(parsed) = serde_json::from_str::<MessageContent>(payload) {
-            return Some(parsed);
-        }
+    if let Some(payload) = content.strip_prefix(STRUCTURED_CONTENT_PREFIX)
+        && let Ok(parsed) = serde_json::from_str::<MessageContent>(payload)
+    {
+        Some(parsed)
+    } else {
+        Some(MessageContent::Text(content.to_string()))
     }
-
-    Some(MessageContent::Text(content.to_string()))
 }
 
 #[cfg(test)]

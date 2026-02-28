@@ -10,6 +10,7 @@ use mofaclaw_core::{
     channels::DiscordChannel,
     load_config,
     provider::{OpenAIConfig, OpenAIProvider},
+    rbac::RbacManager,
     save_config,
     tools::{ToolRegistry, ToolRegistryExecutor},
 };
@@ -211,7 +212,7 @@ async fn command_onboard() -> Result<()> {
     let config_path = mofaclaw_core::get_config_path();
 
     if config_path.exists() {
-        println!("\n⚠️  Config already exists at {}", config_path.display());
+        println!("\nWarning: Config already exists at {}", config_path.display());
         println!("Proceed anyway? This will overwrite your existing config.");
         // In real implementation, would prompt for confirmation
     }
@@ -220,12 +221,12 @@ async fn command_onboard() -> Result<()> {
     let config = Config::default();
     save_config(&config).await?;
 
-    println!("\n✅ Created config at {}", config_path.display());
+    println!("\nCreated config at {}", config_path.display());
 
     // Create workspace
     let workspace = mofaclaw_core::get_workspace_path();
     tokio::fs::create_dir_all(&workspace).await?;
-    println!("✅ Created workspace at {}", workspace.display());
+    println!("Created workspace at {}", workspace.display());
 
     // Create default files
     create_workspace_templates(&workspace).await?;
@@ -349,7 +350,7 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     if config.channels.dingtalk.enabled {
         let dingtalk = DingTalkChannel::new(config.channels.dingtalk.clone(), bus.clone());
         channel_manager.register_channel(Arc::new(dingtalk)).await;
-        println!("✅ DingTalk: enabled (via Python bridge on ws://localhost:3002)");
+        println!("DingTalk: enabled (via Python bridge on ws://localhost:3002)");
     }
 
     // register telegram channel if enabled
@@ -357,10 +358,10 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
         match TelegramChannel::new(config.channels.telegram.clone(), bus.clone()) {
             Ok(telegram) => {
                 channel_manager.register_channel(Arc::new(telegram)).await;
-                println!("✅ Telegram: enabled");
+                println!("Telegram: enabled");
             }
             Err(e) => {
-                println!("⚠️  Telegram: failed to initialize: {}", e);
+                println!("Telegram: failed to initialize: {}", e);
             }
         }
     }
@@ -369,27 +370,44 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     if config.channels.feishu.enabled {
         let feishu = FeishuChannel::new(config.channels.feishu.clone(), bus.clone());
         channel_manager.register_channel(Arc::new(feishu)).await;
-        println!("✅ Feishu: enabled (via Python bridge on ws://localhost:3004)");
+        println!("Feishu: enabled (via Python bridge on ws://localhost:3004)");
     }
+
+    // Initialize RBAC manager if configured
+    let rbac_manager: Option<Arc<RbacManager>> = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
+        if rbac_config.enabled {
+            let workspace = config.workspace_path();
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     // register discord channel if enabled
     if config.channels.discord.enabled {
-        match DiscordChannel::new(config.channels.discord.clone(), bus.clone()) {
+        match if let Some(ref rbac) = rbac_manager {
+            DiscordChannel::with_rbac(config.channels.discord.clone(), bus.clone(), Some(rbac.clone()))
+        } else {
+            DiscordChannel::new(config.channels.discord.clone(), bus.clone())
+        } {
             Ok(discord) => {
                 channel_manager.register_channel(Arc::new(discord)).await;
-                println!("✅ Discord: enabled");
+                println!("Discord: enabled");
             }
             Err(e) => {
-                println!("⚠️  Discord: failed to initialize: {}", e);
+                println!("Discord: failed to initialize: {}", e);
             }
         }
     }
 
     if channel_manager.has_enabled_channels() {
         let enabled = channel_manager.enabled_channels().join(", ");
-        println!("✅ Channels: {}", enabled);
+        println!("Channels: {}", enabled);
     } else {
-        println!("⚠️  No channels enabled");
+        println!("No channels enabled");
     }
 
     // Create heartbeat service
@@ -403,8 +421,8 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
         Box::pin(async move { Ok(agent.process_direct(&prompt, "heartbeat").await?) })
     }));
 
-    println!("✅ Heartbeat: every 30m");
-    println!("✅ Ready!");
+    println!("Heartbeat: every 30m");
+    println!("Ready!");
 
     // Start heartbeat
     heartbeat.start().await?;
@@ -543,9 +561,9 @@ async fn command_status() -> Result<()> {
         "Config: {} {}",
         config_path.display(),
         if config_path.exists() {
-            green.apply_to("✅")
+            green.apply_to("OK")
         } else {
-            console::style("❌").red()
+            console::style("FAIL").red()
         }
     );
 
@@ -553,9 +571,9 @@ async fn command_status() -> Result<()> {
         "Workspace: {} {}",
         workspace.display(),
         if workspace.exists() {
-            green.apply_to("✅")
+            green.apply_to("OK")
         } else {
-            console::style("❌").red()
+            console::style("FAIL").red()
         }
     );
 
@@ -570,7 +588,7 @@ async fn command_status() -> Result<()> {
         println!(
             "OpenRouter API: {}",
             if has_openrouter {
-                green.apply_to("✅")
+                green.apply_to("OK")
             } else {
                 console::style("not set").dim()
             }
@@ -578,7 +596,7 @@ async fn command_status() -> Result<()> {
         println!(
             "Anthropic API: {}",
             if has_anthropic {
-                green.apply_to("✅")
+                green.apply_to("OK")
             } else {
                 console::style("not set").dim()
             }
@@ -586,7 +604,7 @@ async fn command_status() -> Result<()> {
         println!(
             "OpenAI API: {}",
             if has_openai {
-                green.apply_to("✅")
+                green.apply_to("OK")
             } else {
                 console::style("not set").dim()
             }
@@ -606,18 +624,18 @@ async fn command_channels(cmd: ChannelCommands) -> Result<()> {
             println!(
                 "WhatsApp: {} - Bridge: {}",
                 if config.channels.whatsapp.enabled {
-                    "✅"
+                    "OK"
                 } else {
-                    "❌"
+                    "FAIL"
                 },
                 config.channels.whatsapp.bridge_url
             );
             println!(
                 "Telegram: {}",
                 if config.channels.telegram.enabled {
-                    "✅"
+                    "OK"
                 } else {
-                    "❌"
+                    "FAIL"
                 }
             );
         }
@@ -749,7 +767,7 @@ async fn command_channels_login() -> Result<()> {
         return Err(anyhow!("npm run build failed"));
     }
 
-    println!("{} Bridge ready\n", green.apply_to("✅"));
+    println!("{} Bridge ready\n", green.apply_to("READY"));
     println!("Starting bridge...");
     println!("Scan the QR code to connect.\n");
 
@@ -841,7 +859,7 @@ async fn command_cron(cmd: CronCommands) -> Result<()> {
                 .add_job(name, schedule, message, false, None, None)
                 .await;
 
-            println!("✅ Added job: {} ({})", job.name, job.id);
+            println!("Added job: {} ({})", job.name, job.id);
             println!("   Message: {}", job.payload.message);
         }
         CronCommands::Remove { job_id } => {
@@ -849,9 +867,9 @@ async fn command_cron(cmd: CronCommands) -> Result<()> {
             let removed = service.remove_job(&job_id).await;
 
             if removed {
-                println!("✅ Removed job: {}", job_id);
+                println!("Removed job: {}", job_id);
             } else {
-                println!("⚠️  Job not found: {}", job_id);
+                println!("Job not found: {}", job_id);
             }
         }
         CronCommands::Enable { job_id, disable } => {
@@ -861,9 +879,9 @@ async fn command_cron(cmd: CronCommands) -> Result<()> {
 
             if let Some(job) = result {
                 let action = if enabled { "enabled" } else { "disabled" };
-                println!("✅ {} job: {} ({})", action, job.name, job_id);
+                println!("{} job: {} ({})", action, job.name, job_id);
             } else {
-                println!("⚠️  Job not found: {}", job_id);
+                println!("Job not found: {}", job_id);
             }
         }
         CronCommands::Run { job_id, force } => {
@@ -871,10 +889,10 @@ async fn command_cron(cmd: CronCommands) -> Result<()> {
             let ran = service.run_job(&job_id, force).await;
 
             if ran {
-                println!("✅ Job executed: {}", job_id);
+                println!("Job executed: {}", job_id);
             } else {
                 println!(
-                    "⚠️  Failed to run job: {} (job not found or disabled)",
+                    "Failed to run job: {} (job not found or disabled)",
                     job_id
                 );
             }
@@ -994,7 +1012,7 @@ async fn copy_builtin_skills(workspace: &PathBuf) -> Result<()> {
 
         if copied_count > 0 {
             println!(
-                "✅ Copied {} builtin skills to {}",
+                "Copied {} builtin skills to {}",
                 copied_count,
                 workspace_skills.display()
             );

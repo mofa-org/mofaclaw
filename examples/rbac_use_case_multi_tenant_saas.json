@@ -1,0 +1,24 @@
+{
+  "rbac": {
+    "enabled": true,
+    "default_role": "member",
+    "permissions": {
+      "tools": {
+        "filesystem": {
+          "read": {
+            "min_role": "member",
+            "path_whitelist": {
+              "member": ["${workspace}/user-${user_id}/**"]
+            }
+          },
+          "write": {
+            "min_role": "member",
+            "path_whitelist": {
+              "member": ["${workspace}/user-${user_id}/**"]
+            }
+          }
+        }
+      }
+    }
+  }
+}

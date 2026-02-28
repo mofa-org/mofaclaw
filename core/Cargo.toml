@@ -35,6 +35,11 @@ infer = "0.15"
 base64 = "0.22"
 glob = "0.3"
 
+# http server for REST API gateway
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
 # telegram
 teloxide = { workspace = true }
 

@@ -6,7 +6,7 @@ use console::Style;
 use mofa_sdk::{llm::LLMAgentBuilder, skills::SkillsManager};
 use mofaclaw_core::{
     AgentLoop, ChannelManager, Config, ContextBuilder, DingTalkChannel, FeishuChannel,
-    HeartbeatService, MessageBus, SessionManager, SubagentManager, TelegramChannel,
+    GatewayServer, HeartbeatService, MessageBus, SessionManager, SubagentManager, TelegramChannel,
     channels::DiscordChannel,
     load_config,
     provider::{OpenAIConfig, OpenAIProvider},
@@ -422,17 +422,25 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     }));
 
     println!("Heartbeat: every 30m");
+
+    // Build HTTP gateway server (binds on the configured port)
+    let gateway_host = config.gateway.host.clone();
+    let http_server = GatewayServer::new(bus.clone(), gateway_host, port, model.clone());
+
     println!("Ready!");
 
     // Start heartbeat
     heartbeat.start().await?;
 
-    // Start everything
+    // Start everything: agent loop + channel manager + HTTP gateway
     tokio::select! {
         result = agent.run() => {
             result?;
         }
         result = channel_manager.start_all() => {
+            result?;
+        }
+        result = http_server.run() => {
             result?;
         }
         _ = tokio::signal::ctrl_c() => {

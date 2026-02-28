@@ -11,6 +11,7 @@ pub mod channels;
 pub mod config;
 pub mod cron;
 pub mod error;
+pub mod gateway;
 pub mod heartbeat;
 pub mod messages;
 pub mod permissions;
@@ -32,6 +33,7 @@ pub use config::{
     get_config_dir, get_config_path, get_data_dir, get_workspace_path, load_config, save_config,
 };
 pub use cron::{CronJob, CronPayload, CronSchedule, CronService};
+pub use gateway::GatewayServer;
 pub use error::*;
 pub use heartbeat::HeartbeatService;
 pub use permissions::{PermissionLevel, PermissionManager};

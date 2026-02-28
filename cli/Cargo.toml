@@ -24,7 +24,7 @@ anyhow = { workspace = true }
 # CLI
 clap = { workspace = true }
 console = { workspace = true }
-dirs = "5.0"
+dirs = "6.0"
 
 # Date/time
 chrono = { workspace = true }

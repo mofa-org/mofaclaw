@@ -12,7 +12,7 @@ repository = "https://github.com/mofa-org/mofaclaw"
 [workspace.dependencies]
 # async runtime
 tokio = { version = "1.42", features = ["full"] }
-tokio-tungstenite = "0.26"
+tokio-tungstenite = "0.28"
 futures-util = "0.3"
 
 # serialization
@@ -34,7 +34,7 @@ thiserror = "2.0"
 async-trait = "0.1"
 
 # http client
-reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+reqwest = { version = "0.13", features = ["json", "stream", "multipart"] }
 
 # http server for webhooks
 axum = "0.8"
@@ -43,26 +43,26 @@ tower-http = { version = "0.6", features = ["cors"] }
 
 # cli
 clap = { version = "4.5", features = ["derive"] }
-console = "0.15"
+console = "0.16"
 
 # telegram
-teloxide = { version = "0.13", features = ["macros"] }
+teloxide = { version = "0.17", features = ["macros"] }
 
 # discord
 serenity = { version = "0.12", features = ["standard_framework", "cache", "http", "gateway", "model", "utils"] }
 poise = "0.6.1"
 
 # cron scheduling
-cron = "0.13"
+cron = "0.15"
 
 # uuid
-uuid = { version = "1.11", features = ["v4"] }
+uuid = { version = "1.21", features = ["v4"] }
 
 # date/time
 chrono = { version = "0.4", features = ["serde"] }
 
 # file system
-dirs = "5.0"
+dirs = "6.0"
 path-clean = "1.0"
 
 # html parsing for web tools
@@ -73,7 +73,7 @@ html2md = "0.2"
 dotenvy = "0.15"
 
 # utility
-regex = "1.11"
-which = "7.0"
+regex = "1.12"
+which = "8.0"
 html-escape = "0.2"
-tempfile = "3.14"
+tempfile = "3.26"

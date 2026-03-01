@@ -1,6 +1,14 @@
 //! Mofaclaw CLI - Command-line interface for the Mofaclaw AI assistant
 
 use anyhow::{Context, Result, anyhow};
+use axum::{
+    body::Bytes,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::post,
+    Router,
+};
 use clap::{Parser, Subcommand};
 use console::Style;
 use mofa_sdk::{llm::LLMAgentBuilder, skills::SkillsManager};
@@ -13,7 +21,9 @@ use mofaclaw_core::{
     rbac::RbacManager,
     save_config,
     tools::{ToolRegistry, ToolRegistryExecutor},
+    webhooks::{build_discord_notifications, verify_signature},
 };
+use tower_http::cors::CorsLayer;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
@@ -244,6 +254,47 @@ async fn command_onboard() -> Result<()> {
     Ok(())
 }
 
+/// Shared state for the GitHub webhook HTTP handler
+#[derive(Clone)]
+struct WebhookState {
+    config: Arc<Config>,
+    bus: MessageBus,
+}
+
+/// Handle POST /webhooks/github — verify signature, parse event, send Discord notifications
+async fn github_webhook_handler(
+    State(state): State<WebhookState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let cfg = &state.config.webhooks.github;
+    if !cfg.enabled || cfg.discord_channel_ids.is_empty() {
+        return (StatusCode::OK, "webhook not configured");
+    }
+
+    let event_type = headers
+        .get("X-GitHub-Event")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let signature = headers
+        .get("X-Hub-Signature-256")
+        .and_then(|v| v.to_str().ok());
+
+    if !verify_signature(&cfg.secret, signature, &body) {
+        tracing::warn!("GitHub webhook signature verification failed");
+        return (StatusCode::UNAUTHORIZED, "invalid signature");
+    }
+
+    let notifications = build_discord_notifications(cfg, event_type, &body);
+    for msg in notifications {
+        if let Err(e) = state.bus.publish_outbound(msg).await {
+            tracing::warn!("Failed to publish webhook notification to bus: {}", e);
+        }
+    }
+
+    (StatusCode::OK, "ok")
+}
+
 /// Start the mofaclaw gateway
 async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     // Setup logging
@@ -409,6 +460,22 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     } else {
         println!("No channels enabled");
     }
+
+    // Start HTTP server for webhooks (e.g. GitHub → Discord)
+    let webhook_state = WebhookState {
+        config: Arc::new(config.clone()),
+        bus: bus.clone(),
+    };
+    let app = Router::new()
+        .route("/webhooks/github", post(github_webhook_handler))
+        .with_state(webhook_state)
+        .layer(CorsLayer::permissive());
+    let addr = format!("{}:{}", config.gateway.host, port);
+    let listener = tokio::net::TcpListener::bind(&addr).await.context("bind gateway port")?;
+    println!("Webhooks: listening on http://{}", addr);
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
 
     // Create heartbeat service
     let agent_for_heartbeat = Arc::clone(&agent);

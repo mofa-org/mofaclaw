@@ -20,6 +20,7 @@ pub mod python_env;
 pub mod session;
 pub mod tools;
 pub mod types;
+pub mod webhooks;
 
 // Re-exports for convenience
 pub use agent::{AgentLoop, ContextBuilder, SubagentManager};
@@ -27,9 +28,10 @@ pub use bus::{InboundMessage, MessageBus, OutboundMessage};
 pub use channels::{Channel, ChannelManager, DingTalkChannel, FeishuChannel, TelegramChannel};
 pub use config::{
     AgentDefaults, AgentsConfig, ChannelsConfig, Config, DingTalkConfig, FeishuConfig,
-    GatewayConfig, ProviderConfig, ProvidersConfig, TelegramConfig, ToolsConfig,
-    TranscriptionConfig, WebSearchConfig, WebToolsConfig, WhatsAppConfig, default_config,
-    get_config_dir, get_config_path, get_data_dir, get_workspace_path, load_config, save_config,
+    GatewayConfig, GitHubWebhookConfig, ProviderConfig, ProvidersConfig, TelegramConfig,
+    ToolsConfig, TranscriptionConfig, WebSearchConfig, WebToolsConfig, WebhooksConfig,
+    WhatsAppConfig, default_config, get_config_dir, get_config_path, get_data_dir,
+    get_workspace_path, load_config, save_config,
 };
 pub use cron::{CronJob, CronPayload, CronSchedule, CronService};
 pub use error::*;
@@ -43,3 +45,4 @@ pub use session::{
 };
 pub use tools::ToolRegistry;
 pub use types::*;
+pub use webhooks::{build_discord_notifications, verify_signature};

@@ -171,22 +171,16 @@ impl CronService {
         // Cancel any existing timer loop
         self.cancel_token.cancel();
 
-        // Wait for old task to finish
-        {
-            let mut timer_task = self.timer_task.write().await;
-            if let Some(handle) = timer_task.take() {
-                handle.abort();
-                let _ = handle.await;
-            }
+        // Hold write lock to prevent concurrent spawns
+        let mut timer_task = self.timer_task.write().await;
+
+        if let Some(handle) = timer_task.take() {
+            handle.abort();
+            let _ = handle.await;
         }
 
         // Create a fresh cancellation token for the new loop
         let cancel = CancellationToken::new();
-        // Store the new token so future arm_timer / stop calls can cancel it.
-        // We need interior mutability — but CronService uses &self, so we
-        // smuggle the child token through a small trick: the spawned task
-        // owns its own token; arm_timer just aborts the JoinHandle.
-        // For stop/remove/add, we abort the handle then call arm_timer again.
 
         let store = Arc::clone(&self.store);
         let on_job = self.on_job.clone();
@@ -326,7 +320,7 @@ impl CronService {
             }
         });
 
-        *self.timer_task.write().await = Some(handle);
+        *timer_task = Some(handle);
     }
 
     /// List all jobs

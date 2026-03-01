@@ -291,6 +291,14 @@ Config file: `~/.mofaclaw/config.json`
     "host": "0.0.0.0",
     "port": 18790
   },
+  "webhooks": {
+    "github": {
+      "enabled": false,
+      "secret": "",
+      "discord_channel_ids": [],
+      "events": ["pull_request", "issues", "push", "workflow_run", "release"]
+    }
+  },
   "tools": {
     "web": {
       "search": {
@@ -305,6 +313,35 @@ Config file: `~/.mofaclaw/config.json`
 }
 ```
 
+</details>
+
+<details>
+<summary><b>GitHub Webhook → Discord notifications</b></summary>
+
+When the gateway is running, you can receive GitHub repo events (PR, issues, push, CI, release) as Discord embeds.
+
+1. **Configure** in `~/.mofaclaw/config.json`:
+
+```json
+"webhooks": {
+  "github": {
+    "enabled": true,
+    "secret": "YOUR_WEBHOOK_SECRET",
+    "discord_channel_ids": ["DISCORD_CHANNEL_ID"],
+    "events": ["pull_request", "issues", "push", "workflow_run", "release"]
+  }
+}
+```
+
+2. **In GitHub**: Repo → Settings → Webhooks → Add webhook  
+   - **Payload URL:** `http(s)://YOUR_HOST:18790/webhooks/github`  
+   - **Content type:** application/json  
+   - **Secret:** same as `webhooks.github.secret`  
+   - **Events:** choose the events you want (or "Send everything")
+
+3. Ensure the **Discord** channel is enabled and the bot has access to the channel IDs in `discord_channel_ids`.
+
+**Full step-by-step:** see [docs/DISCORD_WEBHOOK_SETUP.md](docs/DISCORD_WEBHOOK_SETUP.md) for Discord bot creation, config, running the gateway, and testing the webhook.
 </details>
 
 ## CLI Reference

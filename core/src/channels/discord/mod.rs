@@ -2143,6 +2143,31 @@ impl Channel for DiscordChannel {
                             }
                         };
 
+                        // If metadata has embed fields (e.g. from GitHub webhook), send as embed
+                        let embed_title = msg.metadata.get("embed_title").and_then(|v| v.as_str());
+                        let embed_description = msg.metadata.get("embed_description").and_then(|v| v.as_str());
+                        if let (Some(title), Some(desc)) = (embed_title, embed_description) {
+                            let mut embed = serenity::CreateEmbed::default()
+                                .title(title)
+                                .description(desc);
+                            if let Some(url) = msg.metadata.get("embed_url").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                                embed = embed.url(url);
+                            }
+                            if let Some(c) = msg.metadata.get("embed_color").and_then(|v| v.as_i64()) {
+                                embed = embed.color(c as u32);
+                            }
+                            let builder = serenity::CreateMessage::new().embed(embed);
+                            match channel_id.send_message(&*http, builder).await {
+                                Ok(_) => {
+                                    debug!("sent embed to discord channel {}", msg.chat_id);
+                                }
+                                Err(e) => {
+                                    error!("failed to send embed to discord: {}", e);
+                                }
+                            }
+                            continue;
+                        }
+
                         // Discord has a 2000 character limit per message, so we need to chunk long messages
                         const MAX_MESSAGE_LENGTH: usize = 2000;
                         let content = &msg.content;

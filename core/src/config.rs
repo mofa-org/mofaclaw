@@ -281,6 +281,30 @@ pub struct ProvidersConfig {
     pub groq: ProviderConfig,
 }
 
+/// GitHub webhook configuration (for pushing repo events to Discord)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitHubWebhookConfig {
+    /// Whether GitHub webhook receiver is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// Webhook secret for X-Hub-Signature-256 verification (optional but recommended)
+    #[serde(default)]
+    pub secret: String,
+    /// Discord channel IDs to post notifications to (e.g. ["1234567890123456789"])
+    #[serde(default)]
+    pub discord_channel_ids: Vec<String>,
+    /// Event types to forward (empty = all supported). e.g. ["pull_request", "issues", "push", "workflow_run", "release"]
+    #[serde(default)]
+    pub events: Vec<String>,
+}
+
+/// Webhooks configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebhooksConfig {
+    #[serde(default)]
+    pub github: GitHubWebhookConfig,
+}
+
 /// Gateway/server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
@@ -372,6 +396,9 @@ pub struct Config {
     /// RBAC configuration
     #[serde(default)]
     pub rbac: Option<RbacConfig>,
+    /// Webhooks (e.g. GitHub → Discord notifications)
+    #[serde(default)]
+    pub webhooks: WebhooksConfig,
 }
 
 impl Config {

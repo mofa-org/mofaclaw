@@ -28,8 +28,9 @@ pub struct CronService {
     store_path: PathBuf,
     store: Arc<RwLock<CronStore>>,
     on_job: Option<CronCallback>,
-    cancel_token: CancellationToken,
+    cancel_token: Arc<std::sync::Mutex<CancellationToken>>,
     timer_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    store_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl CronService {
@@ -39,8 +40,9 @@ impl CronService {
             store_path,
             store: Arc::new(RwLock::new(CronStore::default())),
             on_job: None,
-            cancel_token: CancellationToken::new(),
+            cancel_token: Arc::new(std::sync::Mutex::new(CancellationToken::new())),
             timer_task: Arc::new(RwLock::new(None)),
+            store_mutex: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -72,7 +74,8 @@ impl CronService {
     /// Stop the cron service
     pub async fn stop(&self) {
         // Cancel the running timer loop
-        self.cancel_token.cancel();
+        let token = self.cancel_token.lock().unwrap().clone();
+        token.cancel();
 
         // Wait for the timer task to finish
         let mut timer_task = self.timer_task.write().await;
@@ -96,7 +99,13 @@ impl CronService {
     }
 
     /// Save jobs to disk atomically (write to .tmp then rename)
-    async fn save_store_atomic(store_path: &PathBuf, store: &Arc<RwLock<CronStore>>) {
+    async fn save_store_atomic(
+        store_path: &PathBuf,
+        store: &Arc<RwLock<CronStore>>,
+        store_mutex: &Arc<tokio::sync::Mutex<()>>,
+    ) {
+        let _guard = store_mutex.lock().await;
+
         let content = {
             let s = store.read().await;
             match serde_json::to_string_pretty(&*s) {
@@ -127,6 +136,8 @@ impl CronService {
     async fn save_store(&self) -> Result<()> {
         let store = self.store.read().await;
         let content = serde_json::to_string_pretty(&*store)?;
+
+        let _guard = self.store_mutex.lock().await;
 
         if let Some(parent) = self.store_path.parent() {
             fs::create_dir_all(parent).await?;
@@ -168,11 +179,15 @@ impl CronService {
 
     /// Schedule the next timer tick — persistent loop with cancellation support
     async fn arm_timer(&self) {
-        // Cancel any existing timer loop
-        self.cancel_token.cancel();
+        // Prevent concurrent re-arming using try_write on timer_task
+        let mut timer_task = match self.timer_task.try_write() {
+            Ok(guard) => guard,
+            Err(_) => return, // Already arming
+        };
 
-        // Hold write lock to prevent concurrent spawns
-        let mut timer_task = self.timer_task.write().await;
+        // Cancel any existing timer loop
+        let old_token = self.cancel_token.lock().unwrap().clone();
+        old_token.cancel();
 
         if let Some(handle) = timer_task.take() {
             handle.abort();
@@ -181,8 +196,10 @@ impl CronService {
 
         // Create a fresh cancellation token for the new loop
         let cancel = CancellationToken::new();
+        *self.cancel_token.lock().unwrap() = cancel.clone();
 
         let store = Arc::clone(&self.store);
+        let store_mutex = Arc::clone(&self.store_mutex);
         let on_job = self.on_job.clone();
         let store_path = self.store_path.clone();
         let cancel_clone = cancel.clone();
@@ -276,7 +293,7 @@ impl CronService {
                 }
 
                 // Save scheduling state to disk atomically
-                Self::save_store_atomic(&store_path, &store).await;
+                Self::save_store_atomic(&store_path, &store, &store_mutex).await;
 
                 // Step 5: Execute due jobs (completion state updated inside spawned task)
                 for job in due_jobs {
@@ -285,6 +302,7 @@ impl CronService {
                         let job_clone = job;
                         let callback_clone = callback.clone();
                         let store_clone = Arc::clone(&store);
+                        let store_mutex_clone = Arc::clone(&store_mutex);
                         let store_path_clone = store_path.clone();
 
                         tokio::spawn(async move {
@@ -311,7 +329,12 @@ impl CronService {
                             }
 
                             // Persist updated completion state
-                            Self::save_store_atomic(&store_path_clone, &store_clone).await;
+                            Self::save_store_atomic(
+                                &store_path_clone,
+                                &store_clone,
+                                &store_mutex_clone,
+                            )
+                            .await;
                         });
                     }
                 }
@@ -443,6 +466,7 @@ impl CronService {
             let job_clone = job.clone();
             let callback_clone = callback.clone();
             let store_clone = Arc::clone(&self.store);
+            let store_mutex_clone = Arc::clone(&self.store_mutex);
             let store_path_clone = self.store_path.clone();
 
             tokio::spawn(async move {
@@ -468,7 +492,7 @@ impl CronService {
                     }
                 }
 
-                Self::save_store_atomic(&store_path_clone, &store_clone).await;
+                Self::save_store_atomic(&store_path_clone, &store_clone, &store_mutex_clone).await;
             });
         }
 
@@ -499,8 +523,9 @@ impl CronService {
     /// Get service status
     pub async fn status(&self) -> CronStatus {
         let store = self.store.read().await;
+        let is_cancelled = self.cancel_token.lock().unwrap().is_cancelled();
         CronStatus {
-            enabled: !self.cancel_token.is_cancelled(),
+            enabled: !is_cancelled,
             jobs: store.jobs.len(),
             next_wake_at_ms: Self::get_next_wake_ms_from_store(&self.store).await,
         }

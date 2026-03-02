@@ -204,7 +204,8 @@ impl CronService {
             let _ = handle.await;
         }
 
-        // Create a fresh cancellation token for the new loop
+        // Create a fresh cancellation token and store it so stop() can cancel the new loop.
+        // (The old token was already cancelled above; the old task was aborted via handle.abort().)
         let cancel = CancellationToken::new();
         *self.cancel_token.lock().unwrap() = cancel.clone();
 
@@ -575,12 +576,25 @@ impl CronService {
 
     /// Get service status
     pub async fn status(&self) -> CronStatus {
+        // Hold a single read lock and compute next_wake from it directly,
+        // avoiding a second lock acquisition inside get_next_wake_ms_from_store.
         let store = self.store.read().await;
         let is_cancelled = self.cancel_token.lock().unwrap().is_cancelled();
+        let next_wake_at_ms = store
+            .jobs
+            .iter()
+            .filter_map(|j| {
+                if j.enabled {
+                    j.state.next_run_at_ms
+                } else {
+                    None
+                }
+            })
+            .min();
         CronStatus {
             enabled: !is_cancelled,
             jobs: store.jobs.len(),
-            next_wake_at_ms: Self::get_next_wake_ms_from_store(&self.store).await,
+            next_wake_at_ms,
         }
     }
 }

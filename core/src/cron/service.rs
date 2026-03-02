@@ -54,6 +54,14 @@ impl CronService {
         self
     }
 
+    /// Set a custom concurrency limit for job execution
+    pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
+        // Ensure at least 1 permit
+        let lim = if limit == 0 { 1 } else { limit };
+        self.max_concurrent_jobs = Arc::new(tokio::sync::Semaphore::new(lim));
+        self
+    }
+
     /// Start the cron service
     pub async fn start(&self) -> Result<()> {
         // Load jobs from disk
@@ -309,16 +317,24 @@ impl CronService {
                         let store_mutex_clone = Arc::clone(&store_mutex);
                         let store_path_clone = store_path.clone();
 
-                        let permit = match max_concurrent_jobs.clone().acquire_owned().await {
-                            Ok(p) => p,
-                            Err(_) => continue,
-                        };
-
                         let span = tracing::info_span!("cron_job_exec", job_id = %job_id, job_name = %job_name);
+
+                        // Clone the semaphore to move into the task
+                        let semaphore_clone = max_concurrent_jobs.clone();
 
                         tokio::spawn(
                             async move {
-                                let _permit = permit;
+                                // Acquire a permit inside the spawned task to avoid blocking the timer loop
+                                let _permit = match semaphore_clone.acquire_owned().await {
+                                    Ok(p) => p,
+                                    Err(_) => {
+                                        error!(
+                                            "Semaphore closed, dropping job execution for {}",
+                                            job_id
+                                        );
+                                        return;
+                                    }
+                                };
                                 let result = callback_clone(job_clone).await;
                                 let finish_time = Utc::now().timestamp_millis();
 
@@ -489,16 +505,21 @@ impl CronService {
             let store_path_clone = self.store_path.clone();
 
             let max_concurrent_jobs = Arc::clone(&self.max_concurrent_jobs);
-            let permit = match max_concurrent_jobs.acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => return false,
-            };
-
             let span = tracing::info_span!("cron_job_exec", job_id = %job_id_owned, job_name = %job_name_owned, run_type = "manual");
 
             tokio::spawn(
                 async move {
-                    let _permit = permit;
+                    // Acquire permit inside the spawned task to avoid blocking the timer loop
+                    let _permit = match max_concurrent_jobs.acquire_owned().await {
+                        Ok(p) => p,
+                        Err(_) => {
+                            error!(
+                                "Semaphore closed, dropping manual job execution for {}",
+                                job_id_owned
+                            );
+                            return;
+                        }
+                    };
                     let result = callback_clone(job_clone).await;
                     let finish_time = Utc::now().timestamp_millis();
 

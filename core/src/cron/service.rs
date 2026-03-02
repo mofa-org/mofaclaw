@@ -251,7 +251,7 @@ impl CronService {
                 // Step 4: Update scheduling state (next_run_at_ms only — NOT completion state)
                 {
                     let mut s = store.write().await;
-                    let mut jobs_to_delete = Vec::new();
+                    let mut jobs_to_delete: Vec<&str> = Vec::new();
 
                     for due in &due_jobs {
                         if let Some(j) = s.jobs.iter_mut().find(|j| j.id == due.id) {
@@ -277,7 +277,7 @@ impl CronService {
                                     // One-shot: clear next run
                                     j.state.next_run_at_ms = None;
                                     if j.delete_after_run {
-                                        jobs_to_delete.push(j.id.clone());
+                                        jobs_to_delete.push(due.id.as_str());
                                     }
                                 }
                             }
@@ -288,7 +288,7 @@ impl CronService {
 
                     // Remove one-shot jobs marked for deletion
                     if !jobs_to_delete.is_empty() {
-                        s.jobs.retain(|j| !jobs_to_delete.contains(&j.id));
+                        s.jobs.retain(|j| !jobs_to_delete.contains(&j.id.as_str()));
                     }
                 }
 

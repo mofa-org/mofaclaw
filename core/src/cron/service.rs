@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::fs;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{Instrument, debug, error, info};
 use uuid::Uuid;
 
 /// Callback type for executing a cron job
@@ -31,6 +31,7 @@ pub struct CronService {
     cancel_token: Arc<std::sync::Mutex<CancellationToken>>,
     timer_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     store_mutex: Arc<tokio::sync::Mutex<()>>,
+    max_concurrent_jobs: Arc<tokio::sync::Semaphore>,
 }
 
 impl CronService {
@@ -43,6 +44,7 @@ impl CronService {
             cancel_token: Arc::new(std::sync::Mutex::new(CancellationToken::new())),
             timer_task: Arc::new(RwLock::new(None)),
             store_mutex: Arc::new(tokio::sync::Mutex::new(())),
+            max_concurrent_jobs: Arc::new(tokio::sync::Semaphore::new(50)), // Default 50 concurrent jobs
         }
     }
 
@@ -200,6 +202,7 @@ impl CronService {
 
         let store = Arc::clone(&self.store);
         let store_mutex = Arc::clone(&self.store_mutex);
+        let max_concurrent_jobs = Arc::clone(&self.max_concurrent_jobs);
         let on_job = self.on_job.clone();
         let store_path = self.store_path.clone();
         let cancel_clone = cancel.clone();
@@ -299,43 +302,58 @@ impl CronService {
                 for job in due_jobs {
                     if let Some(callback) = &on_job {
                         let job_id = job.id.clone();
+                        let job_name = job.name.clone();
                         let job_clone = job;
                         let callback_clone = callback.clone();
                         let store_clone = Arc::clone(&store);
                         let store_mutex_clone = Arc::clone(&store_mutex);
                         let store_path_clone = store_path.clone();
 
-                        tokio::spawn(async move {
-                            let result = callback_clone(job_clone).await;
-                            let finish_time = Utc::now().timestamp_millis();
+                        let permit = match max_concurrent_jobs.clone().acquire_owned().await {
+                            Ok(p) => p,
+                            Err(_) => continue,
+                        };
 
-                            // Update completion state in store
-                            {
-                                let mut s = store_clone.write().await;
-                                if let Some(j) = s.jobs.iter_mut().find(|j| j.id == job_id) {
-                                    j.state.last_run_at_ms = Some(finish_time);
-                                    match result {
-                                        Ok(_) => {
-                                            j.state.last_status = Some("ok".to_string());
-                                            j.state.last_error = None;
-                                        }
-                                        Err(ref e) => {
-                                            j.state.last_status = Some("error".to_string());
-                                            j.state.last_error = Some(format!("{}", e));
-                                            error!("Cron job '{}' execution failed: {}", job_id, e);
+                        let span = tracing::info_span!("cron_job_exec", job_id = %job_id, job_name = %job_name);
+
+                        tokio::spawn(
+                            async move {
+                                let _permit = permit;
+                                let result = callback_clone(job_clone).await;
+                                let finish_time = Utc::now().timestamp_millis();
+
+                                // Update completion state in store
+                                {
+                                    let mut s = store_clone.write().await;
+                                    if let Some(j) = s.jobs.iter_mut().find(|j| j.id == job_id) {
+                                        j.state.last_run_at_ms = Some(finish_time);
+                                        match result {
+                                            Ok(_) => {
+                                                j.state.last_status = Some("ok".to_string());
+                                                j.state.last_error = None;
+                                            }
+                                            Err(ref e) => {
+                                                j.state.last_status = Some("error".to_string());
+                                                j.state.last_error = Some(format!("{}", e));
+                                                error!(
+                                                    "Cron job '{}' execution failed: {}",
+                                                    job_id, e
+                                                );
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            // Persist updated completion state
-                            Self::save_store_atomic(
-                                &store_path_clone,
-                                &store_clone,
-                                &store_mutex_clone,
-                            )
-                            .await;
-                        });
+                                // Persist updated completion state
+                                Self::save_store_atomic(
+                                    &store_path_clone,
+                                    &store_clone,
+                                    &store_mutex_clone,
+                                )
+                                .await;
+                            }
+                            .instrument(span),
+                        );
                     }
                 }
 
@@ -463,37 +481,51 @@ impl CronService {
         // Execute the job — completion state updated by the spawned task
         if let Some(callback) = &self.on_job {
             let job_id_owned = job.id.clone();
+            let job_name_owned = job.name.clone();
             let job_clone = job.clone();
             let callback_clone = callback.clone();
             let store_clone = Arc::clone(&self.store);
             let store_mutex_clone = Arc::clone(&self.store_mutex);
             let store_path_clone = self.store_path.clone();
 
-            tokio::spawn(async move {
-                let result = callback_clone(job_clone).await;
-                let finish_time = Utc::now().timestamp_millis();
+            let max_concurrent_jobs = Arc::clone(&self.max_concurrent_jobs);
+            let permit = match max_concurrent_jobs.acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => return false,
+            };
 
-                {
-                    let mut s = store_clone.write().await;
-                    if let Some(j) = s.jobs.iter_mut().find(|j| j.id == job_id_owned) {
-                        j.state.last_run_at_ms = Some(finish_time);
-                        j.updated_at_ms = finish_time;
-                        match result {
-                            Ok(_) => {
-                                j.state.last_status = Some("ok".to_string());
-                                j.state.last_error = None;
-                            }
-                            Err(ref e) => {
-                                j.state.last_status = Some("error".to_string());
-                                j.state.last_error = Some(format!("{}", e));
-                                error!("Cron job '{}' execution failed: {}", job_id_owned, e);
+            let span = tracing::info_span!("cron_job_exec", job_id = %job_id_owned, job_name = %job_name_owned, run_type = "manual");
+
+            tokio::spawn(
+                async move {
+                    let _permit = permit;
+                    let result = callback_clone(job_clone).await;
+                    let finish_time = Utc::now().timestamp_millis();
+
+                    {
+                        let mut s = store_clone.write().await;
+                        if let Some(j) = s.jobs.iter_mut().find(|j| j.id == job_id_owned) {
+                            j.state.last_run_at_ms = Some(finish_time);
+                            j.updated_at_ms = finish_time;
+                            match result {
+                                Ok(_) => {
+                                    j.state.last_status = Some("ok".to_string());
+                                    j.state.last_error = None;
+                                }
+                                Err(ref e) => {
+                                    j.state.last_status = Some("error".to_string());
+                                    j.state.last_error = Some(format!("{}", e));
+                                    error!("Cron job '{}' execution failed: {}", job_id_owned, e);
+                                }
                             }
                         }
                     }
-                }
 
-                Self::save_store_atomic(&store_path_clone, &store_clone, &store_mutex_clone).await;
-            });
+                    Self::save_store_atomic(&store_path_clone, &store_clone, &store_mutex_clone)
+                        .await;
+                }
+                .instrument(span),
+            );
         }
 
         // Update scheduling state for recurring jobs

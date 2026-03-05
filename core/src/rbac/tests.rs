@@ -102,7 +102,13 @@ mod tests {
         // Add filesystem tool permissions
         let mut fs_read_whitelist = HashMap::new();
         fs_read_whitelist.insert("guest".to_string(), vec!["${workspace}/**".to_string()]);
-        fs_read_whitelist.insert("member".to_string(), vec!["${workspace}/**".to_string(), "${home}/projects/**".to_string()]);
+        fs_read_whitelist.insert(
+            "member".to_string(),
+            vec![
+                "${workspace}/**".to_string(),
+                "${home}/projects/**".to_string(),
+            ],
+        );
 
         let mut fs_write_whitelist = HashMap::new();
         fs_write_whitelist.insert("member".to_string(), vec!["${workspace}/**".to_string()]);
@@ -139,9 +145,7 @@ mod tests {
         let mut tools = HashMap::new();
         tools.insert(
             "filesystem".to_string(),
-            ToolPermissionConfig {
-                operations: fs_ops,
-            },
+            ToolPermissionConfig { operations: fs_ops },
         );
 
         // Add shell tool permissions
@@ -152,7 +156,12 @@ mod tests {
                 min_role: "member".to_string(),
                 path_whitelist: HashMap::new(),
                 path_blacklist: Vec::new(),
-                allowed: vec!["ls".to_string(), "cat".to_string(), "git status".to_string(), "gh * view".to_string()],
+                allowed: vec![
+                    "ls".to_string(),
+                    "cat".to_string(),
+                    "git status".to_string(),
+                    "gh * view".to_string(),
+                ],
             },
         );
         shell_ops.insert(
@@ -177,16 +186,24 @@ mod tests {
         // Add Discord role mapping
         let mut discord_mapping = ChannelRoleMapping::default();
         discord_mapping.superadmin_roles.push("Owner".to_string());
-        discord_mapping.superadmin_roles.push("Bot Admin".to_string());
+        discord_mapping
+            .superadmin_roles
+            .push("Bot Admin".to_string());
         discord_mapping.admin_roles.push("Admin".to_string());
         discord_mapping.admin_roles.push("Moderator".to_string());
         discord_mapping.member_roles.push("Member".to_string());
         discord_mapping.member_roles.push("Contributor".to_string());
         discord_mapping.guest_roles.push("@everyone".to_string());
-        discord_mapping.user_overrides.insert("123456789012345678".to_string(), "admin".to_string());
-        discord_mapping.user_overrides.insert("987654321098765432".to_string(), "superadmin".to_string());
+        discord_mapping
+            .user_overrides
+            .insert("123456789012345678".to_string(), "admin".to_string());
+        discord_mapping
+            .user_overrides
+            .insert("987654321098765432".to_string(), "superadmin".to_string());
 
-        config.role_mappings.insert("discord".to_string(), discord_mapping);
+        config
+            .role_mappings
+            .insert("discord".to_string(), discord_mapping);
 
         config
     }
@@ -365,10 +382,7 @@ mod tests {
 
     #[test]
     fn test_path_matcher_expand_variables() {
-        let matcher = PathMatcher::new(
-            PathBuf::from("/workspace"),
-            PathBuf::from("/home/user"),
-        );
+        let matcher = PathMatcher::new(PathBuf::from("/workspace"), PathBuf::from("/home/user"));
 
         assert_eq!(
             matcher.expand_variables("${workspace}/test"),
@@ -382,10 +396,7 @@ mod tests {
 
     #[test]
     fn test_path_matcher_glob_patterns() {
-        let matcher = PathMatcher::new(
-            PathBuf::from("/workspace"),
-            PathBuf::from("/home/user"),
-        );
+        let matcher = PathMatcher::new(PathBuf::from("/workspace"), PathBuf::from("/home/user"));
 
         let path = PathBuf::from("/workspace/test.txt");
         assert!(matcher.matches(&path, &["${workspace}/**".to_string()]));
@@ -548,10 +559,7 @@ mod tests {
         let manager = create_test_manager();
 
         // User with no roles should get default role
-        assert_eq!(
-            manager.get_role_from_discord("unknown", &[]),
-            Role::Guest
-        );
+        assert_eq!(manager.get_role_from_discord("unknown", &[]), Role::Guest);
     }
 
     #[test]
@@ -560,7 +568,14 @@ mod tests {
 
         // User with multiple roles should get highest
         assert_eq!(
-            manager.get_role_from_discord("456", &["Member".to_string(), "Admin".to_string(), "Contributor".to_string()]),
+            manager.get_role_from_discord(
+                "456",
+                &[
+                    "Member".to_string(),
+                    "Admin".to_string(),
+                    "Contributor".to_string()
+                ]
+            ),
             Role::Admin
         );
     }
@@ -572,29 +587,26 @@ mod tests {
         // User override should take precedence even if user has lower roles
         assert_eq!(
             manager.get_role_from_discord("123456789012345678", &["Member".to_string()]),
-            Role::Admin  // Override takes precedence
+            Role::Admin // Override takes precedence
         );
     }
 
     #[test]
     fn test_path_matcher_various_paths() {
-        let matcher = PathMatcher::new(
-            PathBuf::from("/workspace"),
-            PathBuf::from("/home/user"),
-        );
+        let matcher = PathMatcher::new(PathBuf::from("/workspace"), PathBuf::from("/home/user"));
 
         // Test with absolute paths
         let abs_path = PathBuf::from("/workspace/test.txt");
         assert!(matcher.matches(&abs_path, &["${workspace}/**".to_string()]));
-        
+
         // Test nested paths
         let nested_path = PathBuf::from("/workspace/src/main.rs");
         assert!(matcher.matches(&nested_path, &["${workspace}/**".to_string()]));
-        
+
         // Test workspace root with exact match pattern
         let workspace_path = PathBuf::from("/workspace");
         assert!(matcher.matches(&workspace_path, &["${workspace}".to_string()]));
-        
+
         // Test subdirectory
         let subdir_path = PathBuf::from("/workspace/subdir/file.txt");
         assert!(matcher.matches(&subdir_path, &["${workspace}/**".to_string()]));
@@ -602,10 +614,7 @@ mod tests {
 
     #[test]
     fn test_path_matcher_multiple_patterns() {
-        let matcher = PathMatcher::new(
-            PathBuf::from("/workspace"),
-            PathBuf::from("/home/user"),
-        );
+        let matcher = PathMatcher::new(PathBuf::from("/workspace"), PathBuf::from("/home/user"));
 
         let path = PathBuf::from("/workspace/src/main.rs");
         let patterns = vec![
@@ -631,8 +640,14 @@ mod tests {
     #[test]
     fn test_config_validation_invalid_min_role() {
         let mut config = create_test_rbac_config();
-        config.permissions.skills.get_mut("github").unwrap()
-            .operations.get_mut("repo.view").unwrap()
+        config
+            .permissions
+            .skills
+            .get_mut("github")
+            .unwrap()
+            .operations
+            .get_mut("repo.view")
+            .unwrap()
             .min_role = "invalid_role".to_string();
         assert!(config.validate().is_err());
     }
@@ -663,7 +678,8 @@ mod tests {
         let manager = create_test_manager();
 
         // Guest should be denied write operations
-        match manager.check_path_access(Role::Guest, "write", &PathBuf::from("/workspace/test.txt")) {
+        match manager.check_path_access(Role::Guest, "write", &PathBuf::from("/workspace/test.txt"))
+        {
             PermissionResult::Denied(_) => {}
             _ => panic!("Expected denied for guest write operation"),
         }

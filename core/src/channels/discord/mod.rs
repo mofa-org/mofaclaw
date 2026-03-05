@@ -178,7 +178,6 @@ impl DiscordChannel {
             Role::from(level)
         }
     }
-
 }
 
 /// issue management command

@@ -24,7 +24,11 @@ pub struct RbacManager {
 
 impl RbacManager {
     /// Create a new RBAC manager
-    pub fn new(config: RbacConfig, workspace: std::path::PathBuf, home: std::path::PathBuf) -> Self {
+    pub fn new(
+        config: RbacConfig,
+        workspace: std::path::PathBuf,
+        home: std::path::PathBuf,
+    ) -> Self {
         let path_matcher = PathMatcher::new(workspace, home);
         Self {
             config,
@@ -100,7 +104,10 @@ impl RbacManager {
         let min_role = match Role::from_str(&op_perm.min_role) {
             Some(role) => role,
             None => {
-                warn!("Invalid min_role '{}' for skill.{}.{}", op_perm.min_role, skill_name, operation);
+                warn!(
+                    "Invalid min_role '{}' for skill.{}.{}",
+                    op_perm.min_role, skill_name, operation
+                );
                 return PermissionResult::Allowed;
             }
         };
@@ -110,7 +117,10 @@ impl RbacManager {
         } else {
             PermissionResult::Denied(format!(
                 "Operation '{}' on skill '{}' requires role '{}' or higher, but user has role '{}'",
-                operation, skill_name, min_role.as_str(), user_role.as_str()
+                operation,
+                skill_name,
+                min_role.as_str(),
+                user_role.as_str()
             ))
         }
     }
@@ -147,7 +157,10 @@ impl RbacManager {
         let min_role = match Role::from_str(&op_perm.min_role) {
             Some(role) => role,
             None => {
-                warn!("Invalid min_role '{}' for tool.{}.{}", op_perm.min_role, tool_name, operation);
+                warn!(
+                    "Invalid min_role '{}' for tool.{}.{}",
+                    op_perm.min_role, tool_name, operation
+                );
                 return PermissionResult::Allowed;
             }
         };
@@ -155,7 +168,10 @@ impl RbacManager {
         if user_role < min_role {
             return PermissionResult::Denied(format!(
                 "Operation '{}' on tool '{}' requires role '{}' or higher, but user has role '{}'",
-                operation, tool_name, min_role.as_str(), user_role.as_str()
+                operation,
+                tool_name,
+                min_role.as_str(),
+                user_role.as_str()
             ));
         }
 
@@ -163,12 +179,7 @@ impl RbacManager {
     }
 
     /// Check path access for filesystem operations
-    pub fn check_path_access(
-        &self,
-        role: Role,
-        operation: &str,
-        path: &Path,
-    ) -> PermissionResult {
+    pub fn check_path_access(&self, role: Role, operation: &str, path: &Path) -> PermissionResult {
         if !self.config.enabled {
             return PermissionResult::Allowed;
         }
@@ -184,7 +195,10 @@ impl RbacManager {
         };
 
         // Check blacklist first
-        if self.path_matcher.is_blacklisted(path, &op_perm.path_blacklist) {
+        if self
+            .path_matcher
+            .is_blacklisted(path, &op_perm.path_blacklist)
+        {
             return PermissionResult::Denied(format!(
                 "Path '{}' is blacklisted for operation '{}'",
                 path.display(),
@@ -245,7 +259,11 @@ impl RbacManager {
         if let Some(op_perm) = tool_config.operations.get("safe_commands") {
             let min_role = match Role::from_str(&op_perm.min_role) {
                 Some(role) => role,
-                None => return PermissionResult::Denied("Invalid safe_commands configuration".to_string()),
+                None => {
+                    return PermissionResult::Denied(
+                        "Invalid safe_commands configuration".to_string(),
+                    );
+                }
             };
 
             if role < min_role {
@@ -265,7 +283,8 @@ impl RbacManager {
 
             return PermissionResult::Denied(format!(
                 "Command '{}' is not in the allowed list for role '{}'",
-                command, role.as_str()
+                command,
+                role.as_str()
             ));
         }
 
@@ -276,9 +295,7 @@ impl RbacManager {
     fn matches_command_pattern(&self, command: &str, pattern: &str) -> bool {
         // Simple wildcard matching
         if pattern.contains('*') {
-            let regex_pattern = pattern
-                .replace(".", "\\.")
-                .replace("*", ".*");
+            let regex_pattern = pattern.replace(".", "\\.").replace("*", ".*");
             if let Ok(re) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
                 return re.is_match(command);
             }
@@ -287,11 +304,7 @@ impl RbacManager {
     }
 
     /// Get role from Discord user ID and roles
-    pub fn get_role_from_discord(
-        &self,
-        user_id: &str,
-        discord_roles: &[String],
-    ) -> Role {
+    pub fn get_role_from_discord(&self, user_id: &str, discord_roles: &[String]) -> Role {
         if !self.config.enabled {
             // Fallback to old behavior
             return self.config.default_role();
@@ -303,10 +316,10 @@ impl RbacManager {
         };
 
         // Check user-specific overrides first (highest priority)
-        if let Some(role_str) = mapping.user_overrides.get(user_id) {
-            if let Some(role) = Role::from_str(role_str) {
-                return role;
-            }
+        if let Some(role_str) = mapping.user_overrides.get(user_id)
+            && let Some(role) = Role::from_str(role_str)
+        {
+            return role;
         }
 
         // Map Discord roles to mofa roles (highest role wins)
@@ -318,16 +331,12 @@ impl RbacManager {
                 return Role::SuperAdmin;
             }
             // Check admin roles
-            if mapping.admin_roles.iter().any(|r| r == discord_role) {
-                if max_role < Role::Admin {
-                    max_role = Role::Admin;
-                }
+            if mapping.admin_roles.iter().any(|r| r == discord_role) && max_role < Role::Admin {
+                max_role = Role::Admin;
             }
             // Check member roles
-            if mapping.member_roles.iter().any(|r| r == discord_role) {
-                if max_role < Role::Member {
-                    max_role = Role::Member;
-                }
+            if mapping.member_roles.iter().any(|r| r == discord_role) && max_role < Role::Member {
+                max_role = Role::Member;
             }
             // Guest roles are default, no need to check
         }
@@ -336,11 +345,7 @@ impl RbacManager {
     }
 
     /// Get role from DingTalk user ID and tags
-    pub fn get_role_from_dingtalk(
-        &self,
-        user_id: &str,
-        tags: &[String],
-    ) -> Role {
+    pub fn get_role_from_dingtalk(&self, user_id: &str, tags: &[String]) -> Role {
         if !self.config.enabled {
             return self.config.default_role();
         }
@@ -351,10 +356,10 @@ impl RbacManager {
         };
 
         // Check user-specific overrides first
-        if let Some(role_str) = mapping.user_overrides.get(user_id) {
-            if let Some(role) = Role::from_str(role_str) {
-                return role;
-            }
+        if let Some(role_str) = mapping.user_overrides.get(user_id)
+            && let Some(role) = Role::from_str(role_str)
+        {
+            return role;
         }
 
         // Map tags to roles (highest role wins)
@@ -364,15 +369,11 @@ impl RbacManager {
             if mapping.superadmin_roles.iter().any(|r| r == tag) {
                 return Role::SuperAdmin;
             }
-            if mapping.admin_roles.iter().any(|r| r == tag) {
-                if max_role < Role::Admin {
-                    max_role = Role::Admin;
-                }
+            if mapping.admin_roles.iter().any(|r| r == tag) && max_role < Role::Admin {
+                max_role = Role::Admin;
             }
-            if mapping.member_roles.iter().any(|r| r == tag) {
-                if max_role < Role::Member {
-                    max_role = Role::Member;
-                }
+            if mapping.member_roles.iter().any(|r| r == tag) && max_role < Role::Member {
+                max_role = Role::Member;
             }
         }
 
@@ -380,11 +381,7 @@ impl RbacManager {
     }
 
     /// Get role from Feishu user ID and tags
-    pub fn get_role_from_feishu(
-        &self,
-        user_id: &str,
-        tags: &[String],
-    ) -> Role {
+    pub fn get_role_from_feishu(&self, user_id: &str, tags: &[String]) -> Role {
         // Same logic as DingTalk
         self.get_role_from_dingtalk(user_id, tags)
     }
@@ -393,7 +390,9 @@ impl RbacManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rbac::config::{ChannelRoleMapping, OperationPermission, PermissionConfig, RbacConfig, RoleDefinition};
+    use crate::rbac::config::{
+        ChannelRoleMapping, OperationPermission, PermissionConfig, RbacConfig, RoleDefinition,
+    };
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -440,9 +439,16 @@ mod tests {
             },
         );
 
-        config.permissions = PermissionConfig { skills, tools: HashMap::new() };
+        config.permissions = PermissionConfig {
+            skills,
+            tools: HashMap::new(),
+        };
 
-        RbacManager::new(config, PathBuf::from("/workspace"), PathBuf::from("/home/user"))
+        RbacManager::new(
+            config,
+            PathBuf::from("/workspace"),
+            PathBuf::from("/home/user"),
+        )
     }
 
     #[test]
@@ -471,17 +477,20 @@ mod tests {
         let mut mapping = ChannelRoleMapping::default();
         mapping.admin_roles.push("Admin".to_string());
         mapping.member_roles.push("Member".to_string());
-        mapping.user_overrides.insert("123".to_string(), "superadmin".to_string());
+        mapping
+            .user_overrides
+            .insert("123".to_string(), "superadmin".to_string());
 
         config.role_mappings.insert("discord".to_string(), mapping);
 
-        let manager = RbacManager::new(config, PathBuf::from("/workspace"), PathBuf::from("/home/user"));
+        let manager = RbacManager::new(
+            config,
+            PathBuf::from("/workspace"),
+            PathBuf::from("/home/user"),
+        );
 
         // Test user override
-        assert_eq!(
-            manager.get_role_from_discord("123", &[]),
-            Role::SuperAdmin
-        );
+        assert_eq!(manager.get_role_from_discord("123", &[]), Role::SuperAdmin);
 
         // Test role mapping
         assert_eq!(

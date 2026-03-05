@@ -76,10 +76,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_test_matcher() -> PathMatcher {
-        PathMatcher::new(
-            PathBuf::from("/workspace"),
-            PathBuf::from("/home/user"),
-        )
+        PathMatcher::new(PathBuf::from("/workspace"), PathBuf::from("/home/user"))
     }
 
     #[test]

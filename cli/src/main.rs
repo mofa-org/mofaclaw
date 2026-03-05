@@ -212,7 +212,10 @@ async fn command_onboard() -> Result<()> {
     let config_path = mofaclaw_core::get_config_path();
 
     if config_path.exists() {
-        println!("\nWarning: Config already exists at {}", config_path.display());
+        println!(
+            "\nWarning: Config already exists at {}",
+            config_path.display()
+        );
         println!("Proceed anyway? This will overwrite your existing config.");
         // In real implementation, would prompt for confirmation
     }
@@ -374,22 +377,27 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     }
 
     // Initialize RBAC manager if configured
-    let rbac_manager: Option<Arc<RbacManager>> = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
-        if rbac_config.enabled {
-            let workspace = config.workspace_path();
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+    let rbac_manager: Option<Arc<RbacManager>> =
+        if let Ok(Some(rbac_config)) = config.get_rbac_config() {
+            if rbac_config.enabled {
+                let workspace = config.workspace_path();
+                let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     // register discord channel if enabled
     if config.channels.discord.enabled {
         match if let Some(ref rbac) = rbac_manager {
-            DiscordChannel::with_rbac(config.channels.discord.clone(), bus.clone(), Some(rbac.clone()))
+            DiscordChannel::with_rbac(
+                config.channels.discord.clone(),
+                bus.clone(),
+                Some(rbac.clone()),
+            )
         } else {
             DiscordChannel::new(config.channels.discord.clone(), bus.clone())
         } {
@@ -891,10 +899,7 @@ async fn command_cron(cmd: CronCommands) -> Result<()> {
             if ran {
                 println!("Job executed: {}", job_id);
             } else {
-                println!(
-                    "Failed to run job: {} (job not found or disabled)",
-                    job_id
-                );
+                println!("Failed to run job: {} (job not found or disabled)", job_id);
             }
         }
     }

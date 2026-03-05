@@ -11,7 +11,7 @@ pub mod role;
 #[cfg(test)]
 mod tests;
 
-pub use audit::{AuditLogger, AuditLogEntry};
+pub use audit::{AuditLogEntry, AuditLogger};
 pub use config::*;
 pub use manager::RbacManager;
 pub use path_matcher::PathMatcher;

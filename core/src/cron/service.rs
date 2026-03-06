@@ -150,9 +150,14 @@ impl CronService {
         if let Err(e) = fs::write(&tmp_path, &content).await {
             error!("Failed to write tmp cron store: {}", e);
         } else {
-            let _ = tokio::fs::remove_file(store_path).await; // Ignore error if not exists
+            // On Windows, rename fails if destination exists.
+            #[cfg(windows)]
+            let _ = tokio::fs::remove_file(store_path).await;
+
             if let Err(e) = fs::rename(&tmp_path, store_path).await {
                 error!("Failed to swap cron store atomically: {}", e);
+                // Try to clean up tmp if rename failed
+                let _ = tokio::fs::remove_file(&tmp_path).await;
             }
         }
     }
@@ -173,8 +178,16 @@ impl CronService {
 
         let tmp_path = self.store_path.with_extension("tmp");
         fs::write(&tmp_path, content).await?;
+
+        // On Windows, rename fails if destination exists.
+        #[cfg(windows)]
         let _ = tokio::fs::remove_file(&self.store_path).await;
-        fs::rename(&tmp_path, &self.store_path).await?;
+
+        if let Err(e) = fs::rename(&tmp_path, &self.store_path).await {
+            // Clean up tmp
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            return Err(e.into());
+        }
         Ok(())
     }
 

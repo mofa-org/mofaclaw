@@ -3,7 +3,7 @@
 use crate::rbac::config::RbacConfig;
 use crate::rbac::path_matcher::PathMatcher;
 use crate::rbac::role::Role;
-use regex;
+
 use std::path::Path;
 use tracing::{debug, warn};
 
@@ -308,16 +308,56 @@ impl RbacManager {
         PermissionResult::Allowed
     }
 
-    /// Check if command matches a pattern (supports wildcards)
+    /// Check if command matches a pattern (supports trailing wildcards) and does not contain shell metacharacters
     fn matches_command_pattern(&self, command: &str, pattern: &str) -> bool {
-        // Simple wildcard matching
-        if pattern.contains('*') {
-            let regex_pattern = pattern.replace(".", "\\.").replace("*", ".*");
-            if let Ok(re) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
-                return re.is_match(command);
+        // Prevent command injection via shell metacharacters before ANY pattern matching.
+        // This stops bypasses even if a wildcard pattern like `*` or `gh repo *` is matched.
+        // Also block \n and \r since they map to command execution in sh -c / cmd /C.
+        const SHELL_METACHARS: &[char] = &[
+            ';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}', '\n', '\r', '%', '!', '^',
+        ];
+        if command.chars().any(|c| SHELL_METACHARS.contains(&c)) {
+            // Avoid logging the command as it might contain secrets
+            return false;
+        }
+
+        let cmd_tokens = match shell_words::split(&command.to_lowercase()) {
+            Ok(tokens) => tokens,
+            Err(_) => return false,
+        };
+
+        let pat_tokens = match shell_words::split(&pattern.to_lowercase()) {
+            Ok(tokens) => tokens,
+            Err(_) => return false, // Invalid configuration pattern
+        };
+
+        if pat_tokens.is_empty() {
+            return cmd_tokens.is_empty();
+        }
+
+        // Linear token matching logic enforcing "trailing wildcards only"
+        for (i, pat_token) in pat_tokens.iter().enumerate() {
+            let is_last_pat_token = i == pat_tokens.len() - 1;
+
+            if pat_token == "*" {
+                // Wildcard is only functional if it's the very last token
+                if is_last_pat_token {
+                    return true;
+                }
+                // (Mid-pattern wildcards are rejected during config load, but handled safely here just in case)
+                if i >= cmd_tokens.len() || cmd_tokens[i] != "*" {
+                    return false;
+                }
+            } else {
+                if i >= cmd_tokens.len() || cmd_tokens[i] != *pat_token {
+                    return false;
+                }
             }
         }
-        command.starts_with(pattern)
+
+        // If we exhausted pat_tokens and didn't hit a trailing '*',
+        // cmd_tokens must not have any extra arguments left.
+        cmd_tokens.len() == pat_tokens.len()
     }
 
     /// Get role from Discord user ID and roles

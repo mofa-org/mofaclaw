@@ -37,11 +37,15 @@ pub struct CronService {
 impl CronService {
     /// Create a new cron service
     pub fn new(store_path: PathBuf) -> Self {
+        // Start with a pre-cancelled token so status() correctly reports
+        // enabled:false until start() is called and arm_timer() replaces it.
+        let initial_token = CancellationToken::new();
+        initial_token.cancel();
         Self {
             store_path,
             store: Arc::new(RwLock::new(CronStore::default())),
             on_job: None,
-            cancel_token: Arc::new(std::sync::Mutex::new(CancellationToken::new())),
+            cancel_token: Arc::new(std::sync::Mutex::new(initial_token)),
             timer_task: Arc::new(RwLock::new(None)),
             store_mutex: Arc::new(tokio::sync::Mutex::new(())),
             max_concurrent_jobs: Arc::new(tokio::sync::Semaphore::new(50)), // Default 50 concurrent jobs
@@ -142,12 +146,15 @@ impl CronService {
         }
     }
 
-    /// Save jobs to disk (convenience wrapper for non-static contexts)
+    /// Save jobs to disk (convenience wrapper for non-static contexts).
+    /// Acquires `store_mutex` BEFORE reading the store to prevent a stale
+    /// snapshot from overwriting a newer one written by `save_store_atomic`.
     async fn save_store(&self) -> Result<()> {
+        let _guard = self.store_mutex.lock().await;
+
         let store = self.store.read().await;
         let content = serde_json::to_string_pretty(&*store)?;
-
-        let _guard = self.store_mutex.lock().await;
+        drop(store);
 
         if let Some(parent) = self.store_path.parent() {
             fs::create_dir_all(parent).await?;
@@ -199,7 +206,12 @@ impl CronService {
         let old_token = self.cancel_token.lock().unwrap().clone();
         old_token.cancel();
 
-        if let Some(handle) = timer_task.take() {
+        // Take the old handle out while holding the lock, then DROP the lock
+        // before awaiting it — awaiting under an async write lock would block
+        // stop() and concurrent arm_timer() callers.
+        let old_handle = timer_task.take();
+        drop(timer_task);
+        if let Some(handle) = old_handle {
             handle.abort();
             let _ = handle.await;
         }
@@ -263,7 +275,7 @@ impl CronService {
                 // Step 4: Update scheduling state (next_run_at_ms only — NOT completion state)
                 {
                     let mut s = store.write().await;
-                    let mut jobs_to_delete: Vec<&str> = Vec::new();
+                    let mut jobs_to_delete: Vec<String> = Vec::new();
 
                     for due in &due_jobs {
                         if let Some(j) = s.jobs.iter_mut().find(|j| j.id == due.id) {
@@ -289,7 +301,7 @@ impl CronService {
                                     // One-shot: clear next run
                                     j.state.next_run_at_ms = None;
                                     if j.delete_after_run {
-                                        jobs_to_delete.push(due.id.as_str());
+                                        jobs_to_delete.push(due.id.clone());
                                     }
                                 }
                             }
@@ -300,7 +312,7 @@ impl CronService {
 
                     // Remove one-shot jobs marked for deletion
                     if !jobs_to_delete.is_empty() {
-                        s.jobs.retain(|j| !jobs_to_delete.contains(&j.id.as_str()));
+                        s.jobs.retain(|j| !jobs_to_delete.contains(&j.id));
                     }
                 }
 
@@ -323,51 +335,68 @@ impl CronService {
                         // Clone the semaphore to move into the task
                         let semaphore_clone = max_concurrent_jobs.clone();
 
+                        // Clone the cancel token per-job — each spawn needs its own clone
+                        // so cancel_clone is not moved on the first iteration.
+                        let job_cancel = cancel_clone.clone();
+
                         tokio::spawn(
                             async move {
-                                // Acquire a permit inside the spawned task to avoid blocking the timer loop
-                                let _permit = match semaphore_clone.acquire_owned().await {
-                                    Ok(p) => p,
-                                    Err(_) => {
-                                        error!(
-                                            "Semaphore closed, dropping job execution for {}",
-                                            job_id
+                                tokio::select! {
+                                    // If the service is stopped mid-execution, abort cleanly
+                                    // without mutating or persisting state.
+                                    _ = job_cancel.cancelled() => {
+                                        debug!(
+                                            "Cron job '{}' ({}) cancelled during shutdown",
+                                            job_name, job_id
                                         );
-                                        return;
                                     }
-                                };
-                                let result = callback_clone(job_clone).await;
-                                let finish_time = Utc::now().timestamp_millis();
-
-                                // Update completion state in store
-                                {
-                                    let mut s = store_clone.write().await;
-                                    if let Some(j) = s.jobs.iter_mut().find(|j| j.id == job_id) {
-                                        j.state.last_run_at_ms = Some(finish_time);
-                                        match result {
-                                            Ok(_) => {
-                                                j.state.last_status = Some("ok".to_string());
-                                                j.state.last_error = None;
-                                            }
-                                            Err(ref e) => {
-                                                j.state.last_status = Some("error".to_string());
-                                                j.state.last_error = Some(format!("{}", e));
+                                    // Normal execution path
+                                    _ = async {
+                                        // Acquire a permit inside the spawned task to avoid blocking the timer loop
+                                        let _permit = match semaphore_clone.acquire_owned().await {
+                                            Ok(p) => p,
+                                            Err(_) => {
                                                 error!(
-                                                    "Cron job '{}' execution failed: {}",
-                                                    job_id, e
+                                                    "Semaphore closed, dropping job execution for {}",
+                                                    job_id
                                                 );
+                                                return;
+                                            }
+                                        };
+                                        let result = callback_clone(job_clone).await;
+                                        let finish_time = Utc::now().timestamp_millis();
+
+                                        // Update completion state in store
+                                        {
+                                            let mut s = store_clone.write().await;
+                                            if let Some(j) = s.jobs.iter_mut().find(|j| j.id == job_id) {
+                                                j.state.last_run_at_ms = Some(finish_time);
+                                                match result {
+                                                    Ok(_) => {
+                                                        j.state.last_status = Some("ok".to_string());
+                                                        j.state.last_error = None;
+                                                    }
+                                                    Err(ref e) => {
+                                                        j.state.last_status = Some("error".to_string());
+                                                        j.state.last_error = Some(format!("{}", e));
+                                                        error!(
+                                                            "Cron job '{}' execution failed: {}",
+                                                            job_id, e
+                                                        );
+                                                    }
+                                                }
                                             }
                                         }
-                                    }
-                                }
 
-                                // Persist updated completion state
-                                Self::save_store_atomic(
-                                    &store_path_clone,
-                                    &store_clone,
-                                    &store_mutex_clone,
-                                )
-                                .await;
+                                        // Persist updated completion state
+                                        Self::save_store_atomic(
+                                            &store_path_clone,
+                                            &store_clone,
+                                            &store_mutex_clone,
+                                        )
+                                        .await;
+                                    } => {}
+                                }
                             }
                             .instrument(span),
                         );
@@ -378,6 +407,9 @@ impl CronService {
             }
         });
 
+        // Re-acquire the write lock to store the new handle.
+        // (We dropped it earlier to avoid holding it across an await.)
+        let mut timer_task = self.timer_task.write().await;
         *timer_task = Some(handle);
     }
 

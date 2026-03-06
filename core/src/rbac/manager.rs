@@ -293,10 +293,17 @@ impl RbacManager {
 
     /// Check if command matches a pattern (supports wildcards) and does not contain shell metacharacters
     fn matches_command_pattern(&self, command: &str, pattern: &str) -> bool {
-        // Prevent command injection via shell metacharacters
-        const SHELL_METACHARS: &[char] = &[';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}'];
+        // Prevent command injection via shell metacharacters.
+        // Includes Unix operators, Windows-specific chars (%,!,^), and
+        // newline/CR to block CRLF injection through env-var expansion.
+        // NOTE: Do NOT log the command itself — it may contain secrets.
+        const SHELL_METACHARS: &[char] = &[
+            ';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}',
+            '\n', '\r',  // newline injection
+            '%', '!', '^', // Windows: %VAR%, delayed expansion, escape char
+        ];
         if command.chars().any(|c| SHELL_METACHARS.contains(&c)) {
-            warn!("Command rejected due to shell metacharacters: {}", command);
+            warn!("Command rejected: contained disallowed shell metacharacters");
             return false;
         }
 

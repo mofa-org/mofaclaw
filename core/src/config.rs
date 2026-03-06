@@ -106,6 +106,10 @@ pub struct FeishuConfig {
     /// Group message policy: "open" or "restricted"
     #[serde(default = "default_feishu_group_policy")]
     pub group_policy: String,
+    /// Send a brief "processing" acknowledgment when a message is received.
+    /// Feishu has no native typing-indicator API; this approximates it.
+    #[serde(default)]
+    pub typing_indicator: bool,
     /// Debug mode
     #[serde(default)]
     pub debug: bool,

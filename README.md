@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://github.com/mofa-org/mofa/raw/main/documents/images/mofa-logo.png" alt="mofaclaw" width="200" height="200">
+  <img src="./mofa-logo.png" alt="mofaclaw" width="200" height="200">
   <h1>mofaclaw: Ultra-Lightweight Personal AI Assistant</h1>
   <p>
     <img src="https://img.shields.io/badge/rust-1.85%2B-orange" alt="Rust">

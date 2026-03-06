@@ -373,10 +373,10 @@ impl RbacManager {
         };
 
         // Check user-specific overrides first (highest priority)
-        if let Some(role_str) = mapping.user_overrides.get(user_id) {
-            if let Some(role) = Role::from_str(role_str) {
-                return role;
-            }
+        if let Some(role_str) = mapping.user_overrides.get(user_id)
+            && let Some(role) = Role::from_str(role_str)
+        {
+            return role;
         }
 
         // Map Discord roles to mofa roles (highest role wins)
@@ -388,16 +388,12 @@ impl RbacManager {
                 return Role::SuperAdmin;
             }
             // Check admin roles
-            if mapping.admin_roles.iter().any(|r| r == discord_role) {
-                if max_role < Role::Admin {
-                    max_role = Role::Admin;
-                }
+            if mapping.admin_roles.iter().any(|r| r == discord_role) && max_role < Role::Admin {
+                max_role = Role::Admin;
             }
             // Check member roles
-            if mapping.member_roles.iter().any(|r| r == discord_role) {
-                if max_role < Role::Member {
-                    max_role = Role::Member;
-                }
+            if mapping.member_roles.iter().any(|r| r == discord_role) && max_role < Role::Member {
+                max_role = Role::Member;
             }
             // Guest roles are default, no need to check
         }
@@ -417,10 +413,10 @@ impl RbacManager {
         };
 
         // Check user-specific overrides first
-        if let Some(role_str) = mapping.user_overrides.get(user_id) {
-            if let Some(role) = Role::from_str(role_str) {
-                return role;
-            }
+        if let Some(role_str) = mapping.user_overrides.get(user_id)
+            && let Some(role) = Role::from_str(role_str)
+        {
+            return role;
         }
 
         // Map tags to roles (highest role wins)
@@ -430,15 +426,11 @@ impl RbacManager {
             if mapping.superadmin_roles.iter().any(|r| r == tag) {
                 return Role::SuperAdmin;
             }
-            if mapping.admin_roles.iter().any(|r| r == tag) {
-                if max_role < Role::Admin {
-                    max_role = Role::Admin;
-                }
+            if mapping.admin_roles.iter().any(|r| r == tag) && max_role < Role::Admin {
+                max_role = Role::Admin;
             }
-            if mapping.member_roles.iter().any(|r| r == tag) {
-                if max_role < Role::Member {
-                    max_role = Role::Member;
-                }
+            if mapping.member_roles.iter().any(|r| r == tag) && max_role < Role::Member {
+                max_role = Role::Member;
             }
         }
 

@@ -1,0 +1,17 @@
+# Minimal deps for CLI + contracts + jobs (no media yet)
+python-dotenv>=1.0.0
+
+# Full pipeline (install when porting from Clip-Forge)
+# google-genai>=1.0.0
+# langchain>=0.3.0
+# langchain-google-genai>=4.0.0
+# torch>=2.5.0
+# torchaudio>=2.5.0
+# chatterbox-tts
+# pydub>=0.25.0
+# moviepy>=1.0.3
+# Pillow>=11.0.0
+# opencv-python-headless>=4.10.0
+# requests>=2.32.0
+# openai-whisper
+# yt-dlp>=2025.1.0

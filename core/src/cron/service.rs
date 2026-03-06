@@ -28,8 +28,8 @@ pub struct CronService {
     store_path: PathBuf,
     store: Arc<RwLock<CronStore>>,
     on_job: Option<CronCallback>,
-    cancel_token: Arc<std::sync::Mutex<CancellationToken>>,
-    job_cancel_token: CancellationToken,
+    cancel_token: Arc<tokio::sync::Mutex<CancellationToken>>,
+    job_cancel_token: Arc<tokio::sync::Mutex<CancellationToken>>,
     timer_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     store_mutex: Arc<tokio::sync::Mutex<()>>,
     max_concurrent_jobs: Arc<tokio::sync::Semaphore>,
@@ -46,8 +46,8 @@ impl CronService {
             store_path,
             store: Arc::new(RwLock::new(CronStore::default())),
             on_job: None,
-            cancel_token: Arc::new(std::sync::Mutex::new(initial_token)),
-            job_cancel_token: CancellationToken::new(),
+            cancel_token: Arc::new(tokio::sync::Mutex::new(initial_token)),
+            job_cancel_token: Arc::new(tokio::sync::Mutex::new(CancellationToken::new())),
             timer_task: Arc::new(RwLock::new(None)),
             store_mutex: Arc::new(tokio::sync::Mutex::new(())),
             max_concurrent_jobs: Arc::new(tokio::sync::Semaphore::new(50)), // Default 50 concurrent jobs
@@ -70,6 +70,9 @@ impl CronService {
 
     /// Start the cron service
     pub async fn start(&self) -> Result<()> {
+        // Reset job cancellation token in case this is a restart
+        *self.job_cancel_token.lock().await = CancellationToken::new();
+
         // Load jobs from disk
         self.load_store().await?;
 
@@ -90,11 +93,11 @@ impl CronService {
     /// Stop the cron service
     pub async fn stop(&self) {
         // Cancel the running timer loop
-        let token = self.cancel_token.lock().unwrap().clone();
+        let token = self.cancel_token.lock().await.clone();
         token.cancel();
 
         // Cancel running jobs
-        self.job_cancel_token.cancel();
+        self.job_cancel_token.lock().await.cancel();
 
         // Wait for the timer task to finish
         let mut timer_task = self.timer_task.write().await;
@@ -209,7 +212,7 @@ impl CronService {
         let mut timer_task = self.timer_task.write().await;
 
         // Cancel any existing timer loop
-        let old_token = self.cancel_token.lock().unwrap().clone();
+        let old_token = self.cancel_token.lock().await.clone();
         old_token.cancel();
 
         // Abort the old handle. We hold the lock so the task is instantly swapped.
@@ -219,7 +222,7 @@ impl CronService {
 
         // Create a fresh cancellation token and store it so stop() can cancel the new loop.
         let cancel = CancellationToken::new();
-        *self.cancel_token.lock().unwrap() = cancel.clone();
+        *self.cancel_token.lock().await = cancel.clone();
 
         let store = Arc::clone(&self.store);
         let store_mutex = Arc::clone(&self.store_mutex);
@@ -227,7 +230,7 @@ impl CronService {
         let on_job = self.on_job.clone();
         let store_path = self.store_path.clone();
         let cancel_clone = cancel.clone();
-        let job_cancel = self.job_cancel_token.clone();
+        let job_cancel = self.job_cancel_token.lock().await.clone();
 
         let handle = tokio::spawn(async move {
             loop {
@@ -276,7 +279,7 @@ impl CronService {
                 // Step 4: Update scheduling state (next_run_at_ms only — NOT completion state)
                 {
                     let mut s = store.write().await;
-                    let mut jobs_to_delete: Vec<String> = Vec::new();
+                    let mut jobs_to_delete = std::collections::HashSet::new();
 
                     for due in &due_jobs {
                         if let Some(j) = s.jobs.iter_mut().find(|j| j.id == due.id) {
@@ -295,15 +298,24 @@ impl CronService {
                                     }
                                 }
                                 CronSchedule::Cron { expr, .. } => {
-                                    j.state.next_run_at_ms =
-                                        expr.as_ref().and_then(|e| parse_cron_next(e, now));
+                                    // Anti-drift for cron: anchor to scheduled time, then snap forward
+                                    if let Some(e) = expr.as_ref() {
+                                        let mut next = parse_cron_next(e, scheduled_at);
+                                        if let Some(n) = next {
+                                            if n <= now {
+                                                next = parse_cron_next(e, now);
+                                            }
+                                        }
+                                        j.state.next_run_at_ms = next;
+                                    } else {
+                                        j.state.next_run_at_ms = None;
+                                    }
                                 }
                                 CronSchedule::At { .. } => {
                                     // One-shot: clear next run
                                     j.state.next_run_at_ms = None;
-                                    if j.delete_after_run {
-                                        jobs_to_delete.push(due.id.clone());
-                                    }
+                                    // One-shot: add to delete list
+                                    jobs_to_delete.insert(due.id.clone());
                                 }
                             }
 
@@ -605,10 +617,12 @@ impl CronService {
 
     /// Get service status
     pub async fn status(&self) -> CronStatus {
+        // First, read the timer task status without holding the store lock.
+        let is_running = self.timer_task.read().await.is_some();
+
         // Hold a single read lock and compute next_wake from it directly,
         // avoiding a second lock acquisition inside get_next_wake_ms_from_store.
         let store = self.store.read().await;
-        let is_running = self.timer_task.read().await.is_some();
         let next_wake_at_ms = store
             .jobs
             .iter()

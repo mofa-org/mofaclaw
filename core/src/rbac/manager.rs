@@ -17,6 +17,7 @@ pub enum PermissionResult {
 }
 
 /// RBAC Manager for permission checking
+#[derive(Debug, Clone)]
 pub struct RbacManager {
     config: RbacConfig,
     path_matcher: PathMatcher,
@@ -273,6 +274,22 @@ impl RbacManager {
                 ));
             }
 
+            // Prevent command injection via shell metacharacters.
+            // Includes Unix operators, Windows-specific chars (%,!,^), and
+            // newline/CR to block CRLF injection through env-var expansion.
+            // NOTE: Do NOT log the command itself — it may contain secrets.
+            const SHELL_METACHARS: &[char] = &[
+                ';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}', '\n',
+                '\r', // newline injection
+                '%', '!', '^', // Windows: %VAR%, delayed expansion, escape char
+            ];
+            if command.chars().any(|c| SHELL_METACHARS.contains(&c)) {
+                warn!("Command rejected: contained disallowed shell metacharacters");
+                return PermissionResult::Denied(
+                    "Command contained disallowed shell metacharacters".to_string(),
+                );
+            }
+
             // Check if command matches any allowed pattern
             let command_lower = command.to_lowercase();
             for pattern in &op_perm.allowed {
@@ -291,22 +308,8 @@ impl RbacManager {
         PermissionResult::Allowed
     }
 
-    /// Check if command matches a pattern (supports wildcards) and does not contain shell metacharacters
+    /// Check if command matches a pattern (supports wildcards)
     fn matches_command_pattern(&self, command: &str, pattern: &str) -> bool {
-        // Prevent command injection via shell metacharacters.
-        // Includes Unix operators, Windows-specific chars (%,!,^), and
-        // newline/CR to block CRLF injection through env-var expansion.
-        // NOTE: Do NOT log the command itself — it may contain secrets.
-        const SHELL_METACHARS: &[char] = &[
-            ';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}',
-            '\n', '\r',  // newline injection
-            '%', '!', '^', // Windows: %VAR%, delayed expansion, escape char
-        ];
-        if command.chars().any(|c| SHELL_METACHARS.contains(&c)) {
-            warn!("Command rejected: contained disallowed shell metacharacters");
-            return false;
-        }
-
         // Simple wildcard matching
         if pattern.contains('*') {
             let regex_pattern = pattern.replace(".", "\\.").replace("*", ".*");

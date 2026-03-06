@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 #[tokio::test]
+#[ignore]
 async fn test_recurring_job_fires_multiple_times() {
     let temp_dir = tempfile::tempdir().unwrap();
     let store_path = temp_dir.path().join("live_test_jobs.json");

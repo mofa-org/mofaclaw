@@ -1,0 +1,6 @@
+name: cf-final
+channels:
+  - defaults
+dependencies:
+  - python=3.11.0
+prefix: E:\Softwares\anaconda\envs\cf-final

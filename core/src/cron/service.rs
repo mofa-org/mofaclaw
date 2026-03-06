@@ -29,6 +29,7 @@ pub struct CronService {
     store: Arc<RwLock<CronStore>>,
     on_job: Option<CronCallback>,
     cancel_token: Arc<std::sync::Mutex<CancellationToken>>,
+    job_cancel_token: CancellationToken,
     timer_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     store_mutex: Arc<tokio::sync::Mutex<()>>,
     max_concurrent_jobs: Arc<tokio::sync::Semaphore>,
@@ -46,6 +47,7 @@ impl CronService {
             store: Arc::new(RwLock::new(CronStore::default())),
             on_job: None,
             cancel_token: Arc::new(std::sync::Mutex::new(initial_token)),
+            job_cancel_token: CancellationToken::new(),
             timer_task: Arc::new(RwLock::new(None)),
             store_mutex: Arc::new(tokio::sync::Mutex::new(())),
             max_concurrent_jobs: Arc::new(tokio::sync::Semaphore::new(50)), // Default 50 concurrent jobs
@@ -90,6 +92,9 @@ impl CronService {
         // Cancel the running timer loop
         let token = self.cancel_token.lock().unwrap().clone();
         token.cancel();
+
+        // Cancel running jobs
+        self.job_cancel_token.cancel();
 
         // Wait for the timer task to finish
         let mut timer_task = self.timer_task.write().await;
@@ -141,8 +146,11 @@ impl CronService {
         let tmp_path = store_path.with_extension("tmp");
         if let Err(e) = fs::write(&tmp_path, &content).await {
             error!("Failed to write tmp cron store: {}", e);
-        } else if let Err(e) = fs::rename(&tmp_path, store_path).await {
-            error!("Failed to swap cron store atomically: {}", e);
+        } else {
+            let _ = tokio::fs::remove_file(store_path).await; // Ignore error if not exists
+            if let Err(e) = fs::rename(&tmp_path, store_path).await {
+                error!("Failed to swap cron store atomically: {}", e);
+            }
         }
     }
 
@@ -162,6 +170,7 @@ impl CronService {
 
         let tmp_path = self.store_path.with_extension("tmp");
         fs::write(&tmp_path, content).await?;
+        let _ = tokio::fs::remove_file(&self.store_path).await;
         fs::rename(&tmp_path, &self.store_path).await?;
         Ok(())
     }
@@ -196,28 +205,19 @@ impl CronService {
 
     /// Schedule the next timer tick — persistent loop with cancellation support
     async fn arm_timer(&self) {
-        // Prevent concurrent re-arming using try_write on timer_task
-        let mut timer_task = match self.timer_task.try_write() {
-            Ok(guard) => guard,
-            Err(_) => return, // Already arming
-        };
+        // Serialize re-arming with a full write lock
+        let mut timer_task = self.timer_task.write().await;
 
         // Cancel any existing timer loop
         let old_token = self.cancel_token.lock().unwrap().clone();
         old_token.cancel();
 
-        // Take the old handle out while holding the lock, then DROP the lock
-        // before awaiting it — awaiting under an async write lock would block
-        // stop() and concurrent arm_timer() callers.
-        let old_handle = timer_task.take();
-        drop(timer_task);
-        if let Some(handle) = old_handle {
+        // Abort the old handle. We hold the lock so the task is instantly swapped.
+        if let Some(handle) = timer_task.take() {
             handle.abort();
-            let _ = handle.await;
         }
 
         // Create a fresh cancellation token and store it so stop() can cancel the new loop.
-        // (The old token was already cancelled above; the old task was aborted via handle.abort().)
         let cancel = CancellationToken::new();
         *self.cancel_token.lock().unwrap() = cancel.clone();
 
@@ -227,6 +227,7 @@ impl CronService {
         let on_job = self.on_job.clone();
         let store_path = self.store_path.clone();
         let cancel_clone = cancel.clone();
+        let job_cancel = self.job_cancel_token.clone();
 
         let handle = tokio::spawn(async move {
             loop {
@@ -335,16 +336,15 @@ impl CronService {
                         // Clone the semaphore to move into the task
                         let semaphore_clone = max_concurrent_jobs.clone();
 
-                        // Clone the cancel token per-job — each spawn needs its own clone
-                        // so cancel_clone is not moved on the first iteration.
-                        let job_cancel = cancel_clone.clone();
+                        // Clone the global job cancellation token (aborted only on stop())
+                        let job_cancel_clone = job_cancel.clone();
 
                         tokio::spawn(
                             async move {
                                 tokio::select! {
                                     // If the service is stopped mid-execution, abort cleanly
                                     // without mutating or persisting state.
-                                    _ = job_cancel.cancelled() => {
+                                    _ = job_cancel_clone.cancelled() => {
                                         debug!(
                                             "Cron job '{}' ({}) cancelled during shutdown",
                                             job_name, job_id
@@ -407,9 +407,6 @@ impl CronService {
             }
         });
 
-        // Re-acquire the write lock to store the new handle.
-        // (We dropped it earlier to avoid holding it across an await.)
-        let mut timer_task = self.timer_task.write().await;
         *timer_task = Some(handle);
     }
 
@@ -611,7 +608,7 @@ impl CronService {
         // Hold a single read lock and compute next_wake from it directly,
         // avoiding a second lock acquisition inside get_next_wake_ms_from_store.
         let store = self.store.read().await;
-        let is_cancelled = self.cancel_token.lock().unwrap().is_cancelled();
+        let is_running = self.timer_task.read().await.is_some();
         let next_wake_at_ms = store
             .jobs
             .iter()
@@ -624,7 +621,7 @@ impl CronService {
             })
             .min();
         CronStatus {
-            enabled: !is_cancelled,
+            enabled: is_running,
             jobs: store.jobs.len(),
             next_wake_at_ms,
         }

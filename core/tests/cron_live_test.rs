@@ -91,7 +91,3 @@ async fn test_recurring_job_fires_multiple_times() {
         total_fires
     );
 }
-        "REGRESSION: recurring job only fired {} time(s) in 7s (expected ≥3). Bug #47 not fixed!",
-        total_fires
-    );
-}

@@ -9,6 +9,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -28,12 +29,51 @@ def cmd_full(args: argparse.Namespace) -> int:
 
     job_id = plan_data.get("job_id", "unknown")
     job_dir = create_job_dir(out_dir.parent, job_id) if out_dir.name != job_id else out_dir
+    # Ensure standard job subdirectories exist even when --out == job_dir
+    for sub in ("audio", "images", "video", "music"):
+        (job_dir / sub).mkdir(parents=True, exist_ok=True)
     write_job_plan(job_dir, plan_data)
 
     log = JobLogger(job_dir)
     log.info("Starting full videolizer pipeline", job_id=job_id)
 
     try:
+        if os.getenv("VIDEOLIZER_DRY_RUN", "").lower() in ("1", "true", "yes", "on"):
+            log.warning("VIDEOLIZER_DRY_RUN enabled: generating placeholder artifacts only")
+
+            # Minimal placeholder artifacts so the Rust tool can be exercised end-to-end.
+            script = (
+                f"Facts you didn't know about {plan_data.get('character','?')} "
+                f"from {plan_data.get('series','?')}. (dry run)"
+            )
+            (job_dir / "script.txt").write_text(script, encoding="utf-8")
+
+            voice_path = job_dir / "audio" / "voiceover.wav"
+            voice_path.write_bytes(b"")  # placeholder
+
+            subs_path = job_dir / "video" / "subtitles.srt"
+            subs_path.write_text("1\n00:00:00,000 --> 00:00:02,000\n(dry run)\n", encoding="utf-8")
+
+            final_path = job_dir / "video" / "final.mp4"
+            final_path.write_bytes(b"")  # placeholder
+
+            result = VideolizeResult(
+                status="success",
+                job_id=job_id,
+                artifacts={
+                    "script": str(job_dir / "script.txt"),
+                    "voiceover": str(voice_path),
+                    "subtitles": str(subs_path),
+                    "final_mp4": str(final_path),
+                    "logs": str(job_dir / "logs.txt"),
+                },
+                metrics={"dry_run": True},
+            )
+            log.close()
+            write_result(job_dir, result.to_dict())
+            print(json.dumps(result.to_dict(), indent=2))
+            return 0
+
         # Step 1: Generate script (content)
         log.step_start("content_generate")
         t0 = time.perf_counter()

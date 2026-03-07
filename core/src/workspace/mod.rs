@@ -174,6 +174,8 @@ impl SharedWorkspace {
         expected_version: Option<u32>,
         strategy: ConflictStrategy,
     ) -> Result<Artifact> {
+        let _mutation_guard = self.artifacts.acquire_mutation_lock(id).await?;
+
         // Check lock – if locked by someone else, reject
         if let Some(lock) = self.locks.is_locked(id).await? {
             if lock.agent != agent {
@@ -187,7 +189,7 @@ impl SharedWorkspace {
 
         let artifact = match self
             .artifacts
-            .update(id, content, agent.clone(), expected_version, strategy)
+            .update_inner(id, content, agent.clone(), expected_version, strategy)
             .await
         {
             Ok(artifact) => artifact,
@@ -237,7 +239,10 @@ impl SharedWorkspace {
                 agent,
                 ChangeAction::Update,
                 Some(id),
-                format!("updated artifact '{}' to v{}", artifact.name, artifact.version),
+                format!(
+                    "updated artifact '{}' to v{}",
+                    artifact.name, artifact.version
+                ),
             )
             .await?;
         Ok(artifact)
@@ -263,6 +268,8 @@ impl SharedWorkspace {
 
     /// Delete an artifact, record the change.
     pub async fn delete_artifact(&self, id: Uuid, agent: AgentId) -> Result<bool> {
+        let _mutation_guard = self.artifacts.acquire_mutation_lock(id).await?;
+
         if let Some(lock) = self.locks.is_locked(id).await? {
             if lock.agent != agent {
                 return Err(crate::error::WorkspaceError::ArtifactLocked {
@@ -273,7 +280,7 @@ impl SharedWorkspace {
             }
         }
 
-        let deleted = self.artifacts.delete(id).await?;
+        let deleted = self.artifacts.delete_inner(id).await?;
         if deleted {
             self.history
                 .record(
@@ -294,6 +301,8 @@ impl SharedWorkspace {
         target_version: u32,
         agent: AgentId,
     ) -> Result<Artifact> {
+        let _mutation_guard = self.artifacts.acquire_mutation_lock(id).await?;
+
         if let Some(lock) = self.locks.is_locked(id).await? {
             if lock.agent != agent {
                 return Err(crate::error::WorkspaceError::ArtifactLocked {
@@ -306,7 +315,7 @@ impl SharedWorkspace {
 
         let artifact = self
             .artifacts
-            .rollback(id, target_version, agent.clone())
+            .rollback_inner(id, target_version, agent.clone())
             .await?;
         self.history
             .record(
@@ -365,11 +374,7 @@ impl SharedWorkspace {
         Ok(serde_json::from_str(&data)?)
     }
 
-    pub async fn add_task(
-        &self,
-        agent: AgentId,
-        description: String,
-    ) -> Result<ActiveTask> {
+    pub async fn add_task(&self, agent: AgentId, description: String) -> Result<ActiveTask> {
         self.add_task_with_status(agent, description, TaskStatus::Pending)
             .await
     }
@@ -408,11 +413,7 @@ impl SharedWorkspace {
         Ok(task)
     }
 
-    pub async fn update_task_status(
-        &self,
-        task_id: Uuid,
-        status: TaskStatus,
-    ) -> Result<bool> {
+    pub async fn update_task_status(&self, task_id: Uuid, status: TaskStatus) -> Result<bool> {
         let _guard = ExclusiveLock::acquire(self.tasks_path.with_extension("json.lock")).await?;
         let mut tasks = self.list_tasks().await?;
         let mut found = false;

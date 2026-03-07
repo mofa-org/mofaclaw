@@ -118,11 +118,7 @@ impl ArtifactStore {
 
     /// Version snapshots store the full artifact (including content) for rollback.
     async fn save_version_snapshot(&self, artifact: &Artifact) -> Result<()> {
-        let path = self.version_path(
-            &artifact.artifact_type,
-            artifact.id,
-            artifact.version,
-        );
+        let path = self.version_path(&artifact.artifact_type, artifact.id, artifact.version);
         atomic_write_json(&path, artifact).await?;
         Ok(())
     }
@@ -172,6 +168,10 @@ impl ArtifactStore {
     }
 
     // ── public API ────────────────────────────────────────────────────
+
+    pub(crate) async fn acquire_mutation_lock(&self, id: Uuid) -> Result<ExclusiveLock> {
+        ExclusiveLock::acquire(self.mutation_lock_path(id)).await
+    }
 
     /// Create a new artifact and persist it.  Returns the assigned UUID.
     pub async fn create(
@@ -223,6 +223,18 @@ impl ArtifactStore {
         strategy: ConflictStrategy,
     ) -> Result<Artifact> {
         let _guard = ExclusiveLock::acquire(self.mutation_lock_path(id)).await?;
+        self.update_inner(id, content, updater, expected_version, strategy)
+            .await
+    }
+
+    pub(crate) async fn update_inner(
+        &self,
+        id: Uuid,
+        content: Vec<u8>,
+        updater: AgentId,
+        expected_version: Option<u32>,
+        strategy: ConflictStrategy,
+    ) -> Result<Artifact> {
         let mut artifact = self
             .get(id)
             .await?
@@ -253,6 +265,10 @@ impl ArtifactStore {
     /// Delete an artifact and all its version snapshots.
     pub async fn delete(&self, id: Uuid) -> Result<bool> {
         let _guard = ExclusiveLock::acquire(self.mutation_lock_path(id)).await?;
+        self.delete_inner(id).await
+    }
+
+    pub(crate) async fn delete_inner(&self, id: Uuid) -> Result<bool> {
         let artifact = match self.get(id).await? {
             Some(a) => a,
             None => return Ok(false),
@@ -306,13 +322,23 @@ impl ArtifactStore {
                 if name.ends_with(".json") && !name.contains(".v") {
                     if let Some(artifact) = self.read_artifact(&entry.path()).await? {
                         // Apply filters
+                        if let Some(ref at) = filter.artifact_type {
+                            if artifact.artifact_type != *at {
+                                continue;
+                            }
+                        }
                         if let Some(ref owner) = filter.owner {
-                            if &artifact.created_by != owner && &artifact.last_modified_by != owner {
+                            if &artifact.created_by != owner && &artifact.last_modified_by != owner
+                            {
                                 continue;
                             }
                         }
                         if let Some(ref needle) = filter.name_contains {
-                            if !artifact.name.to_lowercase().contains(&needle.to_lowercase()) {
+                            if !artifact
+                                .name
+                                .to_lowercase()
+                                .contains(&needle.to_lowercase())
+                            {
                                 continue;
                             }
                         }
@@ -358,22 +384,24 @@ impl ArtifactStore {
         target_version: u32,
         agent: AgentId,
     ) -> Result<Artifact> {
+        let _guard = ExclusiveLock::acquire(self.mutation_lock_path(id)).await?;
+        self.rollback_inner(id, target_version, agent).await
+    }
+
+    pub(crate) async fn rollback_inner(
+        &self,
+        id: Uuid,
+        target_version: u32,
+        agent: AgentId,
+    ) -> Result<Artifact> {
         let versions = self.get_versions(id).await?;
         let snapshot = versions
             .into_iter()
             .find(|a| a.version == target_version)
-            .ok_or_else(|| {
-                crate::error::WorkspaceError::VersionNotFound(id, target_version)
-            })?;
+            .ok_or_else(|| crate::error::WorkspaceError::VersionNotFound(id, target_version))?;
 
         // Create a new version whose content matches the old snapshot
-        self.update(
-            id,
-            snapshot.content,
-            agent,
-            None,
-            ConflictStrategy::Reject,
-        )
-        .await
+        self.update_inner(id, snapshot.content, agent, None, ConflictStrategy::Reject)
+            .await
     }
 }

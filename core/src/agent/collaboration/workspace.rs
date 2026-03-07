@@ -226,13 +226,13 @@ impl SharedWorkspace {
         let id = id.into();
         
         // RBAC check: verify agent can write files
-        if let Some(caps) = role_capabilities {
-            if !caps.can_write_files {
-                return Err(crate::error::MofaclawError::Other(format!(
-                    "Agent {} does not have permission to create artifacts (write_files capability required)",
-                    created_by
-                )).into());
-            }
+        if let Some(caps) = role_capabilities
+            && !caps.can_write_files
+        {
+            return Err(crate::error::MofaclawError::Other(format!(
+                "Agent {} does not have permission to create artifacts (write_files capability required)",
+                created_by
+            )));
         }
 
         info!("Creating artifact {} in workspace {}", id, self.team_id);
@@ -277,13 +277,13 @@ impl SharedWorkspace {
         role_capabilities: Option<&crate::agent::roles::RoleCapabilities>,
     ) -> Result<Artifact> {
         // RBAC check: verify agent can write files
-        if let Some(caps) = role_capabilities {
-            if !caps.can_write_files {
-                return Err(crate::error::MofaclawError::Other(format!(
-                    "Agent {} does not have permission to update artifacts (write_files capability required)",
-                    modified_by
-                )).into());
-            }
+        if let Some(caps) = role_capabilities
+            && !caps.can_write_files
+        {
+            return Err(crate::error::MofaclawError::Other(format!(
+                "Agent {} does not have permission to update artifacts (write_files capability required)",
+                modified_by
+            )));
         }
 
         info!(
@@ -335,11 +335,11 @@ impl SharedWorkspace {
         role_capabilities: Option<&crate::agent::roles::RoleCapabilities>,
     ) -> Option<Artifact> {
         // RBAC check: verify agent can read files
-        if let Some(caps) = role_capabilities {
-            if !caps.can_read_files {
-                warn!("Agent does not have permission to read artifacts (read_files capability required)");
-                return None;
-            }
+        if let Some(caps) = role_capabilities
+            && !caps.can_read_files
+        {
+            warn!("Agent does not have permission to read artifacts (read_files capability required)");
+            return None;
         }
 
         let artifacts = self.artifacts.read().await;
@@ -363,14 +363,13 @@ impl SharedWorkspace {
         let artifacts = self.artifacts.read().await;
         artifacts
             .values()
-            .filter(|a| match (&a.artifact_type, artifact_type) {
-                (ArtifactType::CodeFile { .. }, ArtifactType::CodeFile { .. }) => true,
-                (ArtifactType::DesignDoc { .. }, ArtifactType::DesignDoc { .. }) => true,
-                (ArtifactType::TestFile { .. }, ArtifactType::TestFile { .. }) => true,
-                (ArtifactType::ReviewComment { .. }, ArtifactType::ReviewComment { .. }) => true,
-                (ArtifactType::Other { .. }, ArtifactType::Other { .. }) => true,
-                _ => false,
-            })
+            .filter(|a| matches!((&a.artifact_type, artifact_type),
+                (ArtifactType::CodeFile { .. }, ArtifactType::CodeFile { .. })
+                | (ArtifactType::DesignDoc { .. }, ArtifactType::DesignDoc { .. })
+                | (ArtifactType::TestFile { .. }, ArtifactType::TestFile { .. })
+                | (ArtifactType::ReviewComment { .. }, ArtifactType::ReviewComment { .. })
+                | (ArtifactType::Other { .. }, ArtifactType::Other { .. })
+            ))
             .cloned()
             .collect()
     }

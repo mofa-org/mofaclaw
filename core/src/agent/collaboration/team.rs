@@ -270,10 +270,10 @@ impl TeamManager {
             if allowed_tools.is_empty() || allowed_tools.contains(&"list_dir".to_string()) {
                 tools_guard.register(ListDirTool::new());
             }
-            if allowed_tools.is_empty() || allowed_tools.contains(&"exec".to_string()) {
-                if role.capabilities().can_execute_commands {
-                    tools_guard.register(ExecTool::new());
-                }
+            if (allowed_tools.is_empty() || allowed_tools.contains(&"exec".to_string()))
+                && role.capabilities().can_execute_commands
+            {
+                tools_guard.register(ExecTool::new());
             }
             if allowed_tools.is_empty() || allowed_tools.contains(&"web_search".to_string()) {
                 tools_guard.register(WebSearchTool::new(brave_api_key.clone()));
@@ -295,8 +295,8 @@ impl TeamManager {
         // Create LLMAgent with role-specific system prompt
         let llm_agent = Arc::new(
             LLMAgentBuilder::new()
-                .with_id(&agent_id.to_string())
-                .with_name(&format!("{} Agent", role.name()))
+                .with_id(agent_id.to_string())
+                .with_name(format!("{} Agent", role.name()))
                 .with_provider(provider.clone())
                 .with_system_prompt(role_system_prompt)
                 .with_tool_executor(tool_executor)

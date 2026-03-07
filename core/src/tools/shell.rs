@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
+use tracing::warn;
 
 /// Tool to execute shell commands
 pub struct ExecTool {
@@ -169,17 +170,32 @@ impl SimpleTool for ExecTool {
     }
 }
 
-/// Execute a command and return its output
+/// Execute a command safely without invoking a shell.
+///
+/// The command string is parsed into argv tokens using POSIX quoting rules
+/// (`shell-words`), then executed directly via `Command::new(program).args(...)`.
+/// The shell interpreter is never involved, eliminating the entire class of
+/// shell metacharacter injection attacks.
 async fn execute_command(command: &str, cwd: Option<&Path>) -> std::io::Result<String> {
-    // Use shell on Unix, cmd on Windows
-    #[cfg(unix)]
-    let (shell, flag) = ("sh", "-c");
-    #[cfg(windows)]
-    let (shell, flag) = ("cmd", "/C");
+    // Parse command into argv using POSIX quoting rules.
+    let argv = shell_words::split(command).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Failed to parse command: {}", e),
+        )
+    })?;
 
-    let mut cmd = Command::new(shell);
-    cmd.arg(flag);
-    cmd.arg(command);
+    if argv.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Empty command",
+        ));
+    }
+
+    let mut cmd = Command::new(&argv[0]);
+    if argv.len() > 1 {
+        cmd.args(&argv[1..]);
+    }
 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -224,18 +240,60 @@ async fn execute_command(command: &str, cwd: Option<&Path>) -> std::io::Result<S
     }
 }
 
-/// Check for potentially dangerous commands
+/// Fallback safety check used when RBAC is disabled.
+///
+/// Blocks shell metacharacters (prevents injection) and rejects commands
+/// whose program name is a well-known high-risk binary.
+/// This is a defence-in-depth measure — prefer enabling RBAC for full control.
 fn is_dangerous_command(command: &str) -> bool {
-    let lower = command.to_lowercase();
-    let dangerous = [
-        "rm -rf /",
-        "rm -rf /*",
-        "mkfs",
-        "dd if=/dev/zero",
-        ":(){ :|:& };:", // fork bomb
-        "chmod 000",
+    // 1. Reject shell metacharacters outright.
+    const SHELL_METACHARS: &[char] = &[
+        ';', '&', '|', '`', '$', '<', '>', '(', ')', '{', '}', '\n', '\r', '%', '!', '^',
     ];
-    dangerous.iter().any(|&d| lower.contains(d))
+    if command.chars().any(|c| SHELL_METACHARS.contains(&c)) {
+        warn!("Fallback safety check: command rejected due to shell metacharacters");
+        return true;
+    }
+
+    // 2. Reject commands whose first token is a high-risk binary.
+    const HIGH_RISK_BINS: &[&str] = &[
+        "rm", "mkfs", "dd", "chmod", "chown", "shred", "curl",
+        "wget", // exfiltration / download
+        "nc", "ncat", "netcat", // reverse shells
+        "bash", "sh", "zsh", "fish", "dash", "ksh", // shell spawning
+        "python", "python3", "ruby", "perl", "node", // interpreter spawning
+        "sudo", "su", // privilege escalation
+    ];
+
+    let parsed_args = match shell_words::split(command) {
+        Ok(args) => args,
+        Err(_) => {
+            warn!("Fallback safety check: command rejected due to unparseable quotes");
+            return true;
+        }
+    };
+
+    if let Some(first_token) = parsed_args.first() {
+        let first_token_lower = first_token.to_lowercase();
+        // Strip any leading path (e.g. /usr/bin/rm → rm)
+        let file_name = std::path::Path::new(&first_token_lower)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&first_token_lower);
+
+        // Strip common extensions (e.g. curl.exe → curl)
+        let bin = std::path::Path::new(file_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(file_name);
+
+        if HIGH_RISK_BINS.contains(&bin) {
+            warn!("Fallback safety check: high-risk binary '{}' rejected", bin);
+            return true;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]

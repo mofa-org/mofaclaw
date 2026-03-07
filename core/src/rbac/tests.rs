@@ -160,7 +160,9 @@ mod tests {
                     "ls".to_string(),
                     "cat".to_string(),
                     "git status".to_string(),
-                    "gh * view".to_string(),
+                    "gh repo view".to_string(),
+                    "gh issue view".to_string(),
+                    "gh pr view".to_string(),
                 ],
             },
         );

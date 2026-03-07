@@ -127,9 +127,37 @@ impl AgentLoop {
         sessions: Arc<SessionManager>,
         tools: Arc<RwLock<ToolRegistry>>,
     ) -> Result<Self> {
-        let max_iterations = config.agents.defaults.max_tool_iterations;
+        Self::with_agent_and_tools_custom(
+            config,
+            agent,
+            provider,
+            bus,
+            sessions,
+            tools,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Create a new agent loop with custom max_iterations and temperature
+    ///
+    /// This allows role-specific configuration of agent behavior.
+    pub async fn with_agent_and_tools_custom(
+        config: &Config,
+        agent: Arc<LLMAgent>,
+        provider: Arc<dyn mofa_sdk::llm::LLMProvider>,
+        bus: MessageBus,
+        sessions: Arc<SessionManager>,
+        tools: Arc<RwLock<ToolRegistry>>,
+        max_iterations_override: Option<usize>,
+        temperature_override: Option<f32>,
+    ) -> Result<Self> {
+        let max_iterations = max_iterations_override
+            .unwrap_or(config.agents.defaults.max_tool_iterations);
         let default_model = config.agents.defaults.model.clone();
-        let temperature = Some(config.agents.defaults.temperature as f32);
+        let temperature = temperature_override
+            .or(Some(config.agents.defaults.temperature as f32));
         let max_tokens = Some(config.agents.defaults.max_tokens as u32);
         let context = ContextBuilder::new(config);
 

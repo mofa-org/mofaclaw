@@ -20,3 +20,8 @@ build/
 
 # test files
 test_weather_format
+
+# development files (keep local, don't commit)
+.claude/
+.cursor/
+.todo/

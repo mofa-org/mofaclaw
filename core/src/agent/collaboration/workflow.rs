@@ -140,6 +140,12 @@ pub struct WorkflowEngine {
     workflows: Arc<RwLock<HashMap<String, Workflow>>>,
 }
 
+impl Default for WorkflowEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WorkflowEngine {
     /// Create a new workflow engine
     pub fn new() -> Self {
@@ -455,13 +461,12 @@ impl WorkflowEngine {
                 Ok(Ok(message)) => {
                     // Check if this is a response to our approval request
                     // Match by correlation_id (which should match our context_id)
-                    if let Some(ref msg_correlation_id) = message.correlation_id {
-                        if msg_correlation_id == &context_id {
-                            if let AgentMessageType::Response { success, payload: _ } = &message.message_type {
-                                info!("Received approval response for step {}: {}", step.id, success);
-                                return Ok(*success);
-                            }
-                        }
+                    if let Some(ref msg_correlation_id) = message.correlation_id
+                        && msg_correlation_id == &context_id
+                        && let AgentMessageType::Response { success, payload: _ } = &message.message_type
+                    {
+                        info!("Received approval response for step {}: {}", step.id, success);
+                        return Ok(*success);
                     }
                     // Continue waiting if not the right message
                 }
@@ -531,8 +536,6 @@ pub struct WorkflowResult {
     /// Error message (if failed)
     pub error: Option<String>,
 }
-
-/// Built-in workflow definitions
 
 /// Create a code review workflow
 pub fn create_code_review_workflow() -> Workflow {

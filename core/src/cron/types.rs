@@ -88,7 +88,6 @@ pub struct CronJobState {
     pub last_error: Option<String>,
 }
 
-
 /// A cron job
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {

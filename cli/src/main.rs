@@ -1404,7 +1404,7 @@ async fn command_workspace(cmd: WorkspaceCommands) -> Result<()> {
         WorkspaceCommands::List { team, r#type } => {
             let config = load_config().await?;
             let workspace_path = config.workspace_path();
-            let workspace = Arc::new(SharedWorkspace::new(team.clone(), workspace_path));
+            let workspace = Arc::new(SharedWorkspace::load(team.clone(), workspace_path).await?);
             let artifact_ids = workspace.list_artifacts().await;
 
             if artifact_ids.is_empty() {
@@ -1429,7 +1429,7 @@ async fn command_workspace(cmd: WorkspaceCommands) -> Result<()> {
         WorkspaceCommands::Show { team, artifact_id } => {
             let config = load_config().await?;
             let workspace_path = config.workspace_path();
-            let workspace = Arc::new(SharedWorkspace::new(team.clone(), workspace_path));
+            let workspace = Arc::new(SharedWorkspace::load(team.clone(), workspace_path).await?);
             match workspace.get_artifact(&artifact_id).await {
                 Some(artifact) => {
                     println!("Artifact: {}", artifact.name);

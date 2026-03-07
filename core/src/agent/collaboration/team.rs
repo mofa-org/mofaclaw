@@ -2,6 +2,12 @@
 //!
 //! Provides structures and functionality for creating and managing teams of agents
 //! with different roles.
+//!
+//! Persistence: when constructed with `with_persistence`, team metadata
+//! (id, name, roles) is saved to `<data_dir>/teams/<id>.json` on creation.
+//! On restart `list_teams` includes both active (in-memory) and inactive
+//! (disk-only) teams, with a clear status so the agent knows which need
+//! to be recreated before use.
 
 use crate::Config;
 use crate::agent::communication::{AgentId, AgentMessageBus};
@@ -10,19 +16,46 @@ use crate::agent::loop_::AgentLoop;
 use crate::agent::roles::{AgentRole, RoleRegistry};
 use crate::bus::MessageBus;
 use crate::error::Result;
-use crate::provider::{LLMAgentBuilder, OpenAIProvider, OpenAIConfig};
+use crate::provider::{LLMAgentBuilder, OpenAIConfig, OpenAIProvider};
 use crate::session::SessionManager;
 use crate::tools::registry::ToolRegistryExecutor;
 use crate::tools::{
+    EditFileTool, ExecTool, ListDirTool, MessageTool, ReadFileTool, ToolRegistry, WebFetchTool,
+    WebSearchTool, WriteFileTool,
     agent_message::{BroadcastToTeamTool, RespondToApprovalTool, SendAgentMessageTool},
-    EditFileTool, ExecTool, ListDirTool, MessageTool, ReadFileTool, ToolRegistry,
-    WebFetchTool, WebSearchTool, WriteFileTool,
 };
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
+
+/// Lightweight snapshot of a team saved to disk for persistence.
+/// Does not include live agent state (AgentLoop instances).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamSnapshot {
+    pub id: String,
+    pub name: String,
+    /// (role_name, instance_id) pairs — enough to recreate the team
+    pub roles: Vec<(String, String)>,
+    pub member_count: usize,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Summary of a team as returned by `list_teams_detailed`.
+#[derive(Debug, Clone)]
+pub struct TeamSummary {
+    pub id: String,
+    pub name: String,
+    pub member_count: usize,
+    pub created_at: DateTime<Utc>,
+    /// True if the team has live agents and can run workflows immediately.
+    /// False means it was persisted from a previous session and must be
+    /// recreated with `create_team` before use.
+    pub active: bool,
+}
 
 /// Status of an agent team
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,37 +173,106 @@ impl AgentTeam {
 
 /// Manager for creating and managing agent teams
 pub struct TeamManager {
-    /// Active teams (stored in Arc for sharing)
+    /// Live teams with instantiated agents
     teams: Arc<RwLock<HashMap<String, Arc<AgentTeam>>>>,
+    /// Persisted snapshots loaded from disk (includes inactive teams)
+    snapshots: Arc<RwLock<HashMap<String, TeamSnapshot>>>,
     /// Role registry
     role_registry: Arc<RoleRegistry>,
-    /// User message bus (for agent responses to users)
     #[allow(dead_code)]
     user_bus: MessageBus,
-    /// Session manager
     sessions: Arc<SessionManager>,
-    /// Configuration
     config: Arc<Config>,
+    data_dir: Option<PathBuf>,
     /// Weak self-reference for tool registration (set after wrapping in Arc)
     self_ref: Arc<RwLock<Option<Weak<TeamManager>>>>,
 }
 
 impl TeamManager {
-    /// Create a new team manager
+    /// Create a team manager with no persistence (in-memory only).
     pub fn new(config: Arc<Config>, user_bus: MessageBus, sessions: Arc<SessionManager>) -> Self {
         Self {
             teams: Arc::new(RwLock::new(HashMap::new())),
+            snapshots: Arc::new(RwLock::new(HashMap::new())),
             role_registry: Arc::new(RoleRegistry::new()),
             user_bus,
             sessions,
             config,
+            data_dir: None,
             self_ref: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Create a team manager that persists team metadata to `data_dir/teams/`.
+    /// Previously-created teams appear in `list_teams` as inactive so the
+    /// agent knows they existed and can decide whether to recreate them.
+    pub async fn with_persistence(
+        config: Arc<Config>,
+        user_bus: MessageBus,
+        sessions: Arc<SessionManager>,
+        data_dir: PathBuf,
+    ) -> Self {
+        let manager = Self {
+            teams: Arc::new(RwLock::new(HashMap::new())),
+            snapshots: Arc::new(RwLock::new(HashMap::new())),
+            role_registry: Arc::new(RoleRegistry::new()),
+            user_bus,
+            sessions,
+            config,
+            data_dir: Some(data_dir),
+            self_ref: Arc::new(RwLock::new(None)),
+        };
+        manager.load_snapshots().await;
+        manager
     }
 
     /// Set self-reference (call after wrapping in Arc)
     pub async fn set_self_ref(self_ref: &Arc<TeamManager>) {
         *self_ref.self_ref.write().await = Some(Arc::downgrade(self_ref));
+    }
+
+    // ------------------------------------------------------------------
+    // Persistence helpers
+    // ------------------------------------------------------------------
+
+    fn teams_dir(&self) -> Option<PathBuf> {
+        self.data_dir.as_ref().map(|d| d.join("teams"))
+    }
+
+    async fn save_snapshot(&self, snapshot: &TeamSnapshot) {
+        let Some(dir) = self.teams_dir() else { return };
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+            warn!("Failed to create teams dir: {}", e);
+            return;
+        }
+        let path = dir.join(format!("{}.json", snapshot.id));
+        match serde_json::to_string_pretty(snapshot) {
+            Ok(json) => {
+                if let Err(e) = tokio::fs::write(&path, json).await {
+                    warn!("Failed to save team snapshot {}: {}", snapshot.id, e);
+                }
+            }
+            Err(e) => warn!("Failed to serialize team {}: {}", snapshot.id, e),
+        }
+    }
+
+    async fn load_snapshots(&self) {
+        let Some(dir) = self.teams_dir() else { return };
+        let mut entries = match tokio::fs::read_dir(&dir).await {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let mut snapshots = self.snapshots.write().await;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "json")
+                && let Ok(bytes) = tokio::fs::read(&path).await
+                && let Ok(snap) = serde_json::from_slice::<TeamSnapshot>(&bytes)
+            {
+                info!("Loaded team snapshot: {} ({})", snap.id, snap.name);
+                snapshots.insert(snap.id.clone(), snap);
+            }
+        }
     }
 
     /// Create a new team with specified roles
@@ -196,6 +298,9 @@ impl TeamManager {
 
         let mut team = AgentTeam::new(&team_id, &team_name);
 
+        // Capture roles for snapshot before consuming the Vec
+        let roles_for_snapshot = roles.clone();
+
         // Create agents for each role
         for (role_name, instance_id) in roles {
             let role = self.role_registry.get_role(&role_name).ok_or_else(|| {
@@ -212,17 +317,33 @@ impl TeamManager {
         // Mark team as active
         team.status = TeamStatus::Active;
 
-        // Store team
+        let member_count = team.member_count();
+        let created_at = team.created_at;
+
+        // Store live team
         let team_arc = Arc::new(team);
         let team_id_clone = team_arc.id.clone();
-        let member_count = team_arc.member_count();
-        let mut teams = self.teams.write().await;
-        teams.insert(team_id_clone.clone(), team_arc);
-        drop(teams);
+        {
+            let mut teams = self.teams.write().await;
+            teams.insert(team_id_clone.clone(), team_arc);
+        }
+
+        // Persist snapshot so the team appears across restarts
+        let snapshot = TeamSnapshot {
+            id: team_id_clone.clone(),
+            name: team_name.clone(),
+            roles: roles_for_snapshot,
+            member_count,
+            created_at,
+        };
+        {
+            let mut snaps = self.snapshots.write().await;
+            snaps.insert(team_id_clone.clone(), snapshot.clone());
+        }
+        self.save_snapshot(&snapshot).await;
 
         info!("Team {} created with {} members", team_id, member_count);
 
-        // Return the team from storage
         let teams = self.teams.read().await;
         Ok(teams.get(&team_id_clone).unwrap().clone())
     }
@@ -233,23 +354,22 @@ impl TeamManager {
         agent_id: AgentId,
         role: Arc<dyn AgentRole>,
     ) -> Result<TeamMember> {
-        info!("Creating team member {} with role {}", agent_id, role.name());
+        info!(
+            "Creating team member {} with role {}",
+            agent_id,
+            role.name()
+        );
 
         // Get API key and base URL from config
-        let api_key = self
-            .config
-            .get_api_key()
-            .ok_or_else(|| {
-                crate::error::MofaclawError::Other("No API key configured".to_string())
-            })?;
+        let api_key = self.config.get_api_key().ok_or_else(|| {
+            crate::error::MofaclawError::Other("No API key configured".to_string())
+        })?;
         let api_base = self.config.get_api_base();
 
         // Create OpenAI provider
         let openai_config = OpenAIConfig::new(&api_key)
             .with_model(&self.config.agents.defaults.model)
-            .with_base_url(api_base.unwrap_or_else(|| {
-                "https://openrouter.ai/api/v1".to_string()
-            }));
+            .with_base_url(api_base.unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string()));
         let provider = Arc::new(OpenAIProvider::with_config(openai_config));
 
         // Create a separate message bus for this agent (or use team's message bus)
@@ -265,7 +385,7 @@ impl TeamManager {
         {
             let mut tools_guard = tools.write().await;
             let allowed_tools = role.allowed_tools();
-            
+
             // Register default tools, but filter based on role
             if allowed_tools.is_empty() || allowed_tools.contains(&"read_file".to_string()) {
                 tools_guard.register(ReadFileTool::new());
@@ -296,12 +416,12 @@ impl TeamManager {
 
             // Register multi-agent collaboration tools
             // These tools enable agents to communicate and coordinate
-            if let Some(weak_manager) = self.self_ref.read().await.as_ref() {
-                if let Some(manager) = weak_manager.upgrade() {
-                    tools_guard.register(SendAgentMessageTool::new(manager.clone()));
-                    tools_guard.register(BroadcastToTeamTool::new(manager.clone()));
-                    tools_guard.register(RespondToApprovalTool::new(manager.clone()));
-                }
+            if let Some(weak_manager) = self.self_ref.read().await.as_ref()
+                && let Some(manager) = weak_manager.upgrade()
+            {
+                tools_guard.register(SendAgentMessageTool::new(manager.clone()));
+                tools_guard.register(BroadcastToTeamTool::new(manager.clone()));
+                tools_guard.register(RespondToApprovalTool::new(manager.clone()));
             }
         }
 
@@ -364,10 +484,62 @@ impl TeamManager {
         teams.get(team_id).cloned()
     }
 
-    /// List all teams
+    /// List IDs of all known teams: both active (in-memory) and inactive
+    /// (persisted from previous sessions).
     pub async fn list_teams(&self) -> Vec<String> {
-        let teams = self.teams.read().await;
-        teams.keys().cloned().collect()
+        let mut ids: std::collections::HashSet<String> =
+            self.teams.read().await.keys().cloned().collect();
+        for id in self.snapshots.read().await.keys() {
+            ids.insert(id.clone());
+        }
+        ids.into_iter().collect()
+    }
+
+    /// Return rich summaries of all known teams, distinguishing active from
+    /// inactive (persisted-only) teams.
+    pub async fn list_teams_detailed(&self) -> Vec<TeamSummary> {
+        let active_teams = self.teams.read().await;
+        let snapshots = self.snapshots.read().await;
+
+        let mut summaries: HashMap<String, TeamSummary> = HashMap::new();
+
+        // Active teams take priority
+        for (id, team) in active_teams.iter() {
+            summaries.insert(
+                id.clone(),
+                TeamSummary {
+                    id: id.clone(),
+                    name: team.name.clone(),
+                    member_count: team.member_count(),
+                    created_at: team.created_at,
+                    active: true,
+                },
+            );
+        }
+
+        // Add inactive (snapshot-only) teams
+        for (id, snap) in snapshots.iter() {
+            if !summaries.contains_key(id) {
+                summaries.insert(
+                    id.clone(),
+                    TeamSummary {
+                        id: id.clone(),
+                        name: snap.name.clone(),
+                        member_count: snap.member_count,
+                        created_at: snap.created_at,
+                        active: false,
+                    },
+                );
+            }
+        }
+
+        summaries.into_values().collect()
+    }
+
+    /// Get the persisted snapshot for a team (works even if the team is
+    /// not currently active in memory).
+    pub async fn get_team_snapshot(&self, team_id: &str) -> Option<TeamSnapshot> {
+        self.snapshots.read().await.get(team_id).cloned()
     }
 
     /// Remove a team

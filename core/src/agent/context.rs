@@ -158,12 +158,12 @@ impl ContextBuilder {
         }
 
         // Requested skills
-        if let Some(names) = skill_names {
-            if !names.is_empty() {
-                let skills_content = self.skills.load_skills_for_context(names).await;
-                if !skills_content.is_empty() {
-                    parts.push(format!("# Requested Skills\n\n{}", skills_content));
-                }
+        if let Some(names) = skill_names
+            && !names.is_empty()
+        {
+            let skills_content = self.skills.load_skills_for_context(names).await;
+            if !skills_content.is_empty() {
+                parts.push(format!("# Requested Skills\n\n{}", skills_content));
             }
         }
 
@@ -239,42 +239,42 @@ Read the skill's SKILL.md file using the `read_file` tool to learn how to use it
         use base64::Engine;
         use std::fs;
 
-        if let Some(media_paths) = media {
-            if !media_paths.is_empty() {
-                let mut images = Vec::new();
+        if let Some(media_paths) = media
+            && !media_paths.is_empty()
+        {
+            let mut images = Vec::new();
 
-                for path in media_paths {
-                    let path_obj = Path::new(path);
-                    if !path_obj.exists() {
-                        debug!("Media file does not exist: {}", path);
-                        continue;
-                    }
-
-                    // Detect MIME type and encode
-                    if let Ok(Some(info)) = infer::get_from_path(path_obj) {
-                        let mime = info.mime_type();
-                        if mime.starts_with("image/") {
-                            if let Ok(bytes) = fs::read(path_obj) {
-                                let base64_str =
-                                    base64::engine::general_purpose::STANDARD_NO_PAD.encode(&bytes);
-                                let data_url = format!("data:{};base64,{}", mime, base64_str);
-                                images.push(serde_json::json!({
-                                    "type": "image_url",
-                                    "image_url": {"url": data_url}
-                                }));
-                            }
-                        }
-                    }
+            for path in media_paths {
+                let path_obj = Path::new(path);
+                if !path_obj.exists() {
+                    debug!("Media file does not exist: {}", path);
+                    continue;
                 }
 
-                if !images.is_empty() {
-                    let mut content = images;
-                    content.push(serde_json::json!({
-                        "type": "text",
-                        "text": text
-                    }));
-                    return Ok(MessageContent::Array(content));
+                // Detect MIME type and encode
+                if let Ok(Some(info)) = infer::get_from_path(path_obj) {
+                    let mime = info.mime_type();
+                    if mime.starts_with("image/")
+                        && let Ok(bytes) = fs::read(path_obj)
+                    {
+                        let base64_str =
+                            base64::engine::general_purpose::STANDARD_NO_PAD.encode(&bytes);
+                        let data_url = format!("data:{};base64,{}", mime, base64_str);
+                        images.push(serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {"url": data_url}
+                        }));
+                    }
                 }
+            }
+
+            if !images.is_empty() {
+                let mut content = images;
+                content.push(serde_json::json!({
+                    "type": "text",
+                    "text": text
+                }));
+                return Ok(MessageContent::Array(content));
             }
         }
 

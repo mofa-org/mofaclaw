@@ -1344,7 +1344,8 @@ fn extract_number(text: &str) -> Option<u32> {
     let words: Vec<&str> = text.split_whitespace().collect();
     for word in words {
         if let Ok(num) = word.parse::<u32>()
-            && num > 0 && num < 100000
+            && num > 0
+            && num < 100000
         {
             return Some(num);
         }

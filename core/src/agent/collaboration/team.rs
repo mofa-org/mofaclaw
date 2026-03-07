@@ -14,12 +14,13 @@ use crate::provider::{LLMAgentBuilder, OpenAIProvider, OpenAIConfig};
 use crate::session::SessionManager;
 use crate::tools::registry::ToolRegistryExecutor;
 use crate::tools::{
+    agent_message::{BroadcastToTeamTool, RespondToApprovalTool, SendAgentMessageTool},
     EditFileTool, ExecTool, ListDirTool, MessageTool, ReadFileTool, ToolRegistry,
     WebFetchTool, WebSearchTool, WriteFileTool,
 };
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -150,6 +151,8 @@ pub struct TeamManager {
     sessions: Arc<SessionManager>,
     /// Configuration
     config: Arc<Config>,
+    /// Weak self-reference for tool registration (set after wrapping in Arc)
+    self_ref: Arc<RwLock<Option<Weak<TeamManager>>>>,
 }
 
 impl TeamManager {
@@ -161,7 +164,13 @@ impl TeamManager {
             user_bus,
             sessions,
             config,
+            self_ref: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set self-reference (call after wrapping in Arc)
+    pub async fn set_self_ref(self_ref: &Arc<TeamManager>) {
+        *self_ref.self_ref.write().await = Some(Arc::downgrade(self_ref));
     }
 
     /// Create a new team with specified roles
@@ -283,6 +292,16 @@ impl TeamManager {
             }
             if allowed_tools.is_empty() || allowed_tools.contains(&"message".to_string()) {
                 tools_guard.register(MessageTool::new());
+            }
+
+            // Register multi-agent collaboration tools
+            // These tools enable agents to communicate and coordinate
+            if let Some(weak_manager) = self.self_ref.read().await.as_ref() {
+                if let Some(manager) = weak_manager.upgrade() {
+                    tools_guard.register(SendAgentMessageTool::new(manager.clone()));
+                    tools_guard.register(BroadcastToTeamTool::new(manager.clone()));
+                    tools_guard.register(RespondToApprovalTool::new(manager.clone()));
+                }
             }
         }
 

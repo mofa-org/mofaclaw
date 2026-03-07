@@ -6,9 +6,7 @@
 //! 3. Use the team for collaborative tasks
 
 use mofaclaw_core::{
-    MessageBus, SessionManager,
-    agent::collaboration::team::TeamManager,
-    load_config,
+    MessageBus, SessionManager, agent::collaboration::team::TeamManager, load_config,
 };
 use std::sync::Arc;
 
@@ -32,14 +30,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("tester".to_string(), "test-1".to_string()),
     ];
 
-    match team_manager.create_team("code-review-team", "Code Review Team", roles).await {
+    match team_manager
+        .create_team("code-review-team", "Code Review Team", roles)
+        .await
+    {
         Ok(team) => {
             println!("✓ Team '{}' created successfully!", team.name);
             println!("  Team ID: {}", team.id);
             println!("  Members: {}", team.member_count());
             println!("\nTeam members:");
             for (instance_id, member) in &team.members {
-                println!("  - {}: {} ({:?})", instance_id, member.agent_id.role, member.status);
+                println!(
+                    "  - {}: {} ({:?})",
+                    instance_id, member.agent_id.role, member.status
+                );
             }
 
             // List all teams

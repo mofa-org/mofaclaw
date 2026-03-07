@@ -1,7 +1,7 @@
 //! Heartbeat service for periodic wake-ups
 
 use crate::error::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs;
@@ -116,7 +116,7 @@ impl HeartbeatService {
 
     /// Internal tick implementation (shared between timer and manual trigger)
     async fn tick_internal(
-        workspace: &PathBuf,
+        workspace: &Path,
         on_heartbeat: &Option<HeartbeatCallback>,
     ) -> Result<()> {
         let heartbeat_path = workspace.join("HEARTBEAT.md");

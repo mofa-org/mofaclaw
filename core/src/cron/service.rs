@@ -139,11 +139,11 @@ impl CronService {
             }
         };
 
-        if let Some(parent) = store_path.parent() {
-            if let Err(e) = fs::create_dir_all(parent).await {
-                error!("Failed to create cron store directory: {}", e);
-                return;
-            }
+        if let Some(parent) = store_path.parent()
+            && let Err(e) = fs::create_dir_all(parent).await
+        {
+            error!("Failed to create cron store directory: {}", e);
+            return;
         }
 
         let tmp_path = store_path.with_extension("tmp");
@@ -314,10 +314,10 @@ impl CronService {
                                     // Anti-drift for cron: anchor to scheduled time, then snap forward
                                     if let Some(e) = expr.as_ref() {
                                         let mut next = parse_cron_next(e, scheduled_at);
-                                        if let Some(n) = next {
-                                            if n <= now {
-                                                next = parse_cron_next(e, now);
-                                            }
+                                        if let Some(n) = next
+                                            && n <= now
+                                        {
+                                            next = parse_cron_next(e, now);
                                         }
                                         j.state.next_run_at_ms = next;
                                     } else {

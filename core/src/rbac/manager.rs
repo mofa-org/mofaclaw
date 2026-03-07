@@ -340,12 +340,12 @@ impl RbacManager {
             let is_last_pat_token = i == pat_tokens.len() - 1;
 
             if pat_token == "*" {
-                // Wildcard is only functional if it's the very last token
+                // Trailing wildcard matches the rest of the command
                 if is_last_pat_token {
                     return true;
                 }
-                // (Mid-pattern wildcards are rejected during config load, but handled safely here just in case)
-                if i >= cmd_tokens.len() || cmd_tokens[i] != "*" {
+                // Mid-pattern wildcard: matches any single token
+                if i >= cmd_tokens.len() {
                     return false;
                 }
             } else {
@@ -355,9 +355,8 @@ impl RbacManager {
             }
         }
 
-        // If we exhausted pat_tokens and didn't hit a trailing '*',
-        // cmd_tokens must not have any extra arguments left.
-        cmd_tokens.len() == pat_tokens.len()
+        // All pattern tokens matched. Allow extra trailing arguments (prefix match).
+        cmd_tokens.len() >= pat_tokens.len()
     }
 
     /// Get role from Discord user ID and roles

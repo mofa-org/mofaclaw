@@ -95,11 +95,21 @@ impl SimpleTool for SendAgentMessageTool {
         // Parse agent IDs
         let from_agent_id = match AgentId::from_str(from_agent_id_str) {
             Some(id) => id,
-            None => return ToolResult::failure(format!("Invalid from_agent_id format: {}", from_agent_id_str)),
+            None => {
+                return ToolResult::failure(format!(
+                    "Invalid from_agent_id format: {}",
+                    from_agent_id_str
+                ));
+            }
         };
         let to_agent_id = match AgentId::from_str(to_agent_id_str) {
             Some(id) => id,
-            None => return ToolResult::failure(format!("Invalid to_agent_id format: {}", to_agent_id_str)),
+            None => {
+                return ToolResult::failure(format!(
+                    "Invalid to_agent_id format: {}",
+                    to_agent_id_str
+                ));
+            }
         };
 
         // Parse request type
@@ -139,8 +149,11 @@ impl SimpleTool for SendAgentMessageTool {
                     "status": "sent",
                     "timestamp": message.timestamp.to_rfc3339(),
                 });
-                ToolResult::success_text(serde_json::to_string(&result_json).unwrap_or_else(|_| format!("Message sent to agent {}", to_agent_id_str)))
-            },
+                ToolResult::success_text(
+                    serde_json::to_string(&result_json)
+                        .unwrap_or_else(|_| format!("Message sent to agent {}", to_agent_id_str)),
+                )
+            }
             Err(e) => ToolResult::failure(format!("Failed to send message: {}", e)),
         }
     }
@@ -221,7 +234,12 @@ impl SimpleTool for BroadcastToTeamTool {
         // Parse agent ID
         let from_agent_id = match AgentId::from_str(from_agent_id_str) {
             Some(id) => id,
-            None => return ToolResult::failure(format!("Invalid from_agent_id format: {}", from_agent_id_str)),
+            None => {
+                return ToolResult::failure(format!(
+                    "Invalid from_agent_id format: {}",
+                    from_agent_id_str
+                ));
+            }
         };
 
         // Get team
@@ -244,8 +262,10 @@ impl SimpleTool for BroadcastToTeamTool {
                     "status": "broadcast",
                     "timestamp": message.timestamp.to_rfc3339(),
                 });
-                ToolResult::success_text(serde_json::to_string(&result_json).unwrap_or_else(|_| format!("Message broadcast to {} team members", team.member_count())))
-            },
+                ToolResult::success_text(serde_json::to_string(&result_json).unwrap_or_else(|_| {
+                    format!("Message broadcast to {} team members", team.member_count())
+                }))
+            }
             Err(e) => ToolResult::failure(format!("Failed to broadcast message: {}", e)),
         }
     }
@@ -257,132 +277,141 @@ impl SimpleTool for BroadcastToTeamTool {
 
 /// Tool to respond to an approval request
 pub struct RespondToApprovalTool {
-        team_manager: Arc<TeamManager>,
+    team_manager: Arc<TeamManager>,
+}
+
+impl RespondToApprovalTool {
+    pub fn new(team_manager: Arc<TeamManager>) -> Self {
+        Self { team_manager }
+    }
+}
+
+#[async_trait]
+impl SimpleTool for RespondToApprovalTool {
+    fn name(&self) -> &str {
+        "respond_to_approval"
     }
 
-    impl RespondToApprovalTool {
-        pub fn new(team_manager: Arc<TeamManager>) -> Self {
-            Self { team_manager }
-        }
+    fn description(&self) -> &str {
+        "Respond to an approval request from a workflow. Requires correlation_id (from the approval request), approval status (approved/rejected), and optional comment."
     }
 
-    #[async_trait]
-    impl SimpleTool for RespondToApprovalTool {
-        fn name(&self) -> &str {
-            "respond_to_approval"
-        }
-
-        fn description(&self) -> &str {
-            "Respond to an approval request from a workflow. Requires correlation_id (from the approval request), approval status (approved/rejected), and optional comment."
-        }
-
-        fn parameters_schema(&self) -> serde_json::Value {
-            json!({
-                "type": "object",
-                "properties": {
-                    "team_id": {
-                        "type": "string",
-                        "description": "The ID of the team"
-                    },
-                    "from_agent_id": {
-                        "type": "string",
-                        "description": "Agent ID of the responder (format: team_id:role:instance_id)"
-                    },
-                    "correlation_id": {
-                        "type": "string",
-                        "description": "Correlation ID from the approval request message"
-                    },
-                    "approved": {
-                        "type": "boolean",
-                        "description": "Whether to approve (true) or reject (false)"
-                    },
-                    "comment": {
-                        "type": "string",
-                        "description": "Optional comment explaining the decision"
-                    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "team_id": {
+                    "type": "string",
+                    "description": "The ID of the team"
                 },
-                "required": ["team_id", "from_agent_id", "correlation_id", "approved"]
-            })
-        }
-
-        async fn execute(&self, input: ToolInput) -> ToolResult {
-            let team_id = match input.get_str("team_id") {
-                Some(id) => id,
-                None => return ToolResult::failure("Missing 'team_id' parameter"),
-            };
-            let from_agent_id_str = match input.get_str("from_agent_id") {
-                Some(id) => id,
-                None => return ToolResult::failure("Missing 'from_agent_id' parameter"),
-            };
-            let correlation_id = match input.get_str("correlation_id") {
-                Some(id) => id,
-                None => return ToolResult::failure("Missing 'correlation_id' parameter"),
-            };
-            let approved = match input.get::<serde_json::Value>("approved") {
-                Some(v) => match v.as_bool() {
-                    Some(b) => b,
-                    None => return ToolResult::failure("Invalid 'approved' parameter: expected a boolean"),
+                "from_agent_id": {
+                    "type": "string",
+                    "description": "Agent ID of the responder (format: team_id:role:instance_id)"
                 },
-                None => return ToolResult::failure("Missing 'approved' parameter"),
-            };
-            let comment = input.get_str("comment").map(|s| s.to_string());
-
-            // Parse agent ID
-            let from_agent_id = match AgentId::from_str(from_agent_id_str) {
-                Some(id) => id,
-                None => return ToolResult::failure(format!("Invalid from_agent_id format: {}", from_agent_id_str)),
-            };
-
-            // Get team
-            let team = match self.team_manager.get_team(team_id).await {
-                Some(t) => t,
-                None => return ToolResult::failure(format!("Team '{}' not found", team_id)),
-            };
-
-            // Find the workflow engine or approver (for now, send to workflow engine)
-            let to_agent_id = AgentId::new(team_id, "workflow", "engine");
-
-            // Create response message
-            let payload = json!({
-                "approved": approved,
-                "comment": comment,
-                "context_id": correlation_id
-            });
-
-            let response = AgentMessage::response(
-                from_agent_id.clone(),
-                to_agent_id,
-                correlation_id.to_string(),
-                approved,
-                payload,
-            );
-
-            // Send response via team's message bus
-            match team.message_bus.publish(response.clone()).await {
-                Ok(_) => {
-                    let result_json = json!({
-                        "message_id": response.id,
-                        "from": from_agent_id_str,
-                        "correlation_id": correlation_id,
-                        "approved": approved,
-                        "status": "sent",
-                        "timestamp": response.timestamp.to_rfc3339(),
-                    });
-                    ToolResult::success_text(
-                        serde_json::to_string(&result_json)
-                            .unwrap_or_else(|_| format!("Approval response sent: {}", if approved { "approved" } else { "rejected" }))
-                    )
+                "correlation_id": {
+                    "type": "string",
+                    "description": "Correlation ID from the approval request message"
                 },
-                Err(e) => ToolResult::failure(format!("Failed to send approval response: {}", e)),
+                "approved": {
+                    "type": "boolean",
+                    "description": "Whether to approve (true) or reject (false)"
+                },
+                "comment": {
+                    "type": "string",
+                    "description": "Optional comment explaining the decision"
+                }
+            },
+            "required": ["team_id", "from_agent_id", "correlation_id", "approved"]
+        })
+    }
+
+    async fn execute(&self, input: ToolInput) -> ToolResult {
+        let team_id = match input.get_str("team_id") {
+            Some(id) => id,
+            None => return ToolResult::failure("Missing 'team_id' parameter"),
+        };
+        let from_agent_id_str = match input.get_str("from_agent_id") {
+            Some(id) => id,
+            None => return ToolResult::failure("Missing 'from_agent_id' parameter"),
+        };
+        let correlation_id = match input.get_str("correlation_id") {
+            Some(id) => id,
+            None => return ToolResult::failure("Missing 'correlation_id' parameter"),
+        };
+        let approved = match input.get::<serde_json::Value>("approved") {
+            Some(v) => match v.as_bool() {
+                Some(b) => b,
+                None => {
+                    return ToolResult::failure("Invalid 'approved' parameter: expected a boolean");
+                }
+            },
+            None => return ToolResult::failure("Missing 'approved' parameter"),
+        };
+        let comment = input.get_str("comment").map(|s| s.to_string());
+
+        // Parse agent ID
+        let from_agent_id = match AgentId::from_str(from_agent_id_str) {
+            Some(id) => id,
+            None => {
+                return ToolResult::failure(format!(
+                    "Invalid from_agent_id format: {}",
+                    from_agent_id_str
+                ));
             }
-        }
+        };
 
-        fn category(&self) -> ToolCategory {
-            ToolCategory::Agent
+        // Get team
+        let team = match self.team_manager.get_team(team_id).await {
+            Some(t) => t,
+            None => return ToolResult::failure(format!("Team '{}' not found", team_id)),
+        };
+
+        // Find the workflow engine or approver (for now, send to workflow engine)
+        let to_agent_id = AgentId::new(team_id, "workflow", "engine");
+
+        // Create response message
+        let payload = json!({
+            "approved": approved,
+            "comment": comment,
+            "context_id": correlation_id
+        });
+
+        let response = AgentMessage::response(
+            from_agent_id.clone(),
+            to_agent_id,
+            correlation_id.to_string(),
+            approved,
+            payload,
+        );
+
+        // Send response via team's message bus
+        match team.message_bus.publish(response.clone()).await {
+            Ok(_) => {
+                let result_json = json!({
+                    "message_id": response.id,
+                    "from": from_agent_id_str,
+                    "correlation_id": correlation_id,
+                    "approved": approved,
+                    "status": "sent",
+                    "timestamp": response.timestamp.to_rfc3339(),
+                });
+                ToolResult::success_text(serde_json::to_string(&result_json).unwrap_or_else(|_| {
+                    format!(
+                        "Approval response sent: {}",
+                        if approved { "approved" } else { "rejected" }
+                    )
+                }))
+            }
+            Err(e) => ToolResult::failure(format!("Failed to send approval response: {}", e)),
         }
     }
 
-    #[cfg(test)]
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Agent
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::Config;
@@ -412,7 +441,12 @@ mod tests {
 
             let result = tool.execute(input).await;
             assert!(!result.success); // Should fail because team doesn't exist
-            assert!(result.as_text().unwrap().contains("Team 'test-team' not found"));
+            assert!(
+                result
+                    .as_text()
+                    .unwrap()
+                    .contains("Team 'test-team' not found")
+            );
         });
     }
 
@@ -436,7 +470,12 @@ mod tests {
 
             let result = tool.execute(input).await;
             assert!(!result.success); // Should fail because team doesn't exist
-            assert!(result.as_text().unwrap().contains("Team 'test-team' not found"));
+            assert!(
+                result
+                    .as_text()
+                    .unwrap()
+                    .contains("Team 'test-team' not found")
+            );
         });
     }
 }

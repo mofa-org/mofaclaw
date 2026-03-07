@@ -62,8 +62,10 @@ pub struct Artifact {
     pub name: String,
     /// Classification of the artifact
     pub artifact_type: ArtifactType,
-    /// Agent that owns / last modified the artifact
-    pub owner: AgentId,
+    /// Agent that originally created the artifact
+    pub created_by: AgentId,
+    /// Agent that last modified the artifact
+    pub last_modified_by: AgentId,
     /// Monotonically increasing version number
     pub version: u32,
     /// Raw content bytes (base64-encoded in JSON)

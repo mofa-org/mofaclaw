@@ -15,6 +15,8 @@ impl ExclusiveLock {
     pub async fn acquire(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let deadline = Instant::now() + Duration::from_secs(5);
+        let mut backoff = Duration::from_millis(10);
+        const MAX_BACKOFF: Duration = Duration::from_millis(200);
 
         loop {
             match OpenOptions::new()
@@ -32,7 +34,8 @@ impl ExclusiveLock {
                     if Instant::now() >= deadline {
                         return Err(WorkspaceError::Busy(path.display().to_string()).into());
                     }
-                    sleep(Duration::from_millis(10)).await;
+                    sleep(backoff).await;
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -55,16 +58,27 @@ pub async fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let temp_name = format!(".{}.{}.tmp", path.file_name().unwrap_or_default().to_string_lossy(), Uuid::new_v4());
     let temp_path = parent.join(temp_name);
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)
-        .await?;
-    file.write_all(bytes).await?;
-    file.flush().await?;
-    drop(file);
+    let result = async {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .await?;
+        file.write_all(bytes).await?;
+        file.sync_all().await?; // fsync for crash safety
+        drop(file);
 
-    fs::rename(&temp_path, path).await?;
+        fs::rename(&temp_path, path).await?;
+        Ok::<(), std::io::Error>(())
+    }
+    .await;
+
+    if let Err(e) = result {
+        // Clean up temp file on failure
+        let _ = fs::remove_file(&temp_path).await;
+        return Err(e.into());
+    }
+
     Ok(())
 }
 

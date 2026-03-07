@@ -26,13 +26,13 @@ pub struct SharedWorkspace {
     /// Root directory of the shared workspace
     path: PathBuf,
     /// Artifact CRUD + versioning
-    pub artifacts: ArtifactStore,
+    pub(crate) artifacts: ArtifactStore,
     /// Shared project knowledge
-    pub context: ContextStore,
+    pub(crate) context: ContextStore,
     /// Exclusive-access locks
-    pub locks: LockManager,
+    pub(crate) locks: LockManager,
     /// Append-only change log
-    pub history: ChangeHistory,
+    pub(crate) history: ChangeHistory,
     /// Active tasks state
     tasks_path: PathBuf,
 }
@@ -81,6 +81,52 @@ impl SharedWorkspace {
     /// The root directory of the shared workspace.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    // ── Direct artifact access (delegates without history) ────────────
+
+    /// Get an artifact by its ID.
+    pub async fn get_artifact(&self, id: Uuid) -> Result<Option<Artifact>> {
+        self.artifacts.get(id).await
+    }
+
+    /// List artifacts matching optional filters.
+    pub async fn list_artifacts(&self, filter: &ArtifactFilter) -> Result<Vec<Artifact>> {
+        self.artifacts.list(filter).await
+    }
+
+    /// Get all version snapshots for an artifact.
+    pub async fn get_artifact_versions(&self, id: Uuid) -> Result<Vec<Artifact>> {
+        self.artifacts.get_versions(id).await
+    }
+
+    // ── Direct context access ─────────────────────────────────────────
+
+    /// List all decisions.
+    pub async fn list_decisions(&self) -> Result<Vec<Decision>> {
+        self.context.list_decisions().await
+    }
+
+    /// List all constraints.
+    pub async fn list_constraints(&self) -> Result<Vec<Constraint>> {
+        self.context.list_constraints().await
+    }
+
+    /// List all glossary entries.
+    pub async fn list_glossary(&self) -> Result<Vec<GlossaryEntry>> {
+        self.context.list_glossary().await
+    }
+
+    // ── Direct history access ─────────────────────────────────────────
+
+    /// Read the full change history.
+    pub async fn read_history(&self) -> Result<Vec<ChangeRecord>> {
+        self.history.read_all().await
+    }
+
+    /// Read recent N history entries (newest first).
+    pub async fn read_recent_history(&self, n: usize) -> Result<Vec<ChangeRecord>> {
+        self.history.read_recent(n).await
     }
 
     // ── Artifact convenience wrappers (with automatic history) ────────

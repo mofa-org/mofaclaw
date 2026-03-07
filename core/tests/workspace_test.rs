@@ -56,11 +56,11 @@ async fn test_artifact_create_and_get() {
 
     assert_eq!(art.name, "design.md");
     assert_eq!(art.version, 1);
-    assert_eq!(art.owner, agent("alice"));
+    assert_eq!(art.created_by, agent("alice"));
     assert_eq!(art.content, b"# Architecture");
 
     // Fetch by ID
-    let fetched = ws.artifacts.get(art.id).await.unwrap().unwrap();
+    let fetched = ws.get_artifact(art.id).await.unwrap().unwrap();
     assert_eq!(fetched.id, art.id);
     assert_eq!(fetched.name, "design.md");
 }
@@ -86,7 +86,7 @@ async fn test_artifact_update_bumps_version() {
 
     assert_eq!(updated.version, 2);
     assert_eq!(updated.content, b"fn main() { println!(\"hi\"); }");
-    assert_eq!(updated.owner, agent("bob"));
+    assert_eq!(updated.last_modified_by, agent("bob"));
 }
 
 #[tokio::test]
@@ -103,12 +103,12 @@ async fn test_artifact_delete() {
         .await
         .unwrap();
 
-    assert!(ws.artifacts.get(art.id).await.unwrap().is_some());
+    assert!(ws.get_artifact(art.id).await.unwrap().is_some());
 
     let deleted = ws.delete_artifact(art.id, agent("charlie")).await.unwrap();
     assert!(deleted);
 
-    assert!(ws.artifacts.get(art.id).await.unwrap().is_none());
+    assert!(ws.get_artifact(art.id).await.unwrap().is_none());
 
     // Double-delete returns false
     let deleted2 = ws.delete_artifact(art.id, agent("charlie")).await.unwrap();
@@ -130,13 +130,12 @@ async fn test_artifact_list_with_filters() {
         .unwrap();
 
     // No filter → all 3
-    let all = ws.artifacts.list(&ArtifactFilter::default()).await.unwrap();
+    let all = ws.list_artifacts(&ArtifactFilter::default()).await.unwrap();
     assert_eq!(all.len(), 3);
 
     // Filter by type
     let designs = ws
-        .artifacts
-        .list(&ArtifactFilter {
+        .list_artifacts(&ArtifactFilter {
             artifact_type: Some(ArtifactType::Design),
             ..Default::default()
         })
@@ -146,8 +145,7 @@ async fn test_artifact_list_with_filters() {
 
     // Filter by owner
     let a2 = ws
-        .artifacts
-        .list(&ArtifactFilter {
+        .list_artifacts(&ArtifactFilter {
             owner: Some(agent("a2")),
             ..Default::default()
         })
@@ -158,8 +156,7 @@ async fn test_artifact_list_with_filters() {
 
     // Filter by name substring
     let arch = ws
-        .artifacts
-        .list(&ArtifactFilter {
+        .list_artifacts(&ArtifactFilter {
             name_contains: Some("arch".into()),
             ..Default::default()
         })
@@ -182,14 +179,14 @@ async fn test_version_history_and_rollback() {
     ws.update_artifact(art.id, b"v2".to_vec(), agent("a")).await.unwrap();
     ws.update_artifact(art.id, b"v3".to_vec(), agent("a")).await.unwrap();
 
-    let versions = ws.artifacts.get_versions(art.id).await.unwrap();
+    let versions = ws.get_artifact_versions(art.id).await.unwrap();
     assert_eq!(versions.len(), 3);
     assert_eq!(versions[0].version, 1);
     assert_eq!(versions[1].version, 2);
     assert_eq!(versions[2].version, 3);
 
     // Rollback to v1 – creates v4 with v1 content
-    let rolled = ws.artifacts.rollback(art.id, 1, agent("a")).await.unwrap();
+    let rolled = ws.rollback_artifact(art.id, 1, agent("a")).await.unwrap();
     assert_eq!(rolled.version, 4);
     assert_eq!(rolled.content, b"v1");
 }
@@ -280,19 +277,18 @@ async fn test_decisions_crud() {
     let (ws, _dir) = open_temp_workspace().await;
 
     let d = ws
-        .context
         .add_decision("Use Rust".into(), "Performance matters".into(), agent("a"))
         .await
         .unwrap();
 
-    let all = ws.context.list_decisions().await.unwrap();
+    let all = ws.list_decisions().await.unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].title, "Use Rust");
 
-    let removed = ws.context.remove_decision(d.id).await.unwrap();
+    let removed = ws.remove_decision(d.id, agent("a")).await.unwrap();
     assert!(removed);
 
-    let all = ws.context.list_decisions().await.unwrap();
+    let all = ws.list_decisions().await.unwrap();
     assert!(all.is_empty());
 }
 
@@ -301,33 +297,31 @@ async fn test_constraints_crud() {
     let (ws, _dir) = open_temp_workspace().await;
 
     let c = ws
-        .context
         .add_constraint("Max 100ms latency".into(), "SLA requirement".into(), agent("b"))
         .await
         .unwrap();
 
-    let all = ws.context.list_constraints().await.unwrap();
+    let all = ws.list_constraints().await.unwrap();
     assert_eq!(all.len(), 1);
 
-    ws.context.remove_constraint(c.id).await.unwrap();
-    assert!(ws.context.list_constraints().await.unwrap().is_empty());
+    ws.remove_constraint(c.id, agent("b")).await.unwrap();
+    assert!(ws.list_constraints().await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn test_glossary_crud() {
     let (ws, _dir) = open_temp_workspace().await;
 
-    ws.context
-        .add_glossary_entry("Artifact".into(), "A shared work product".into(), agent("c"))
+    ws.add_glossary_entry("Artifact".into(), "A shared work product".into(), agent("c"))
         .await
         .unwrap();
 
-    let entries = ws.context.list_glossary().await.unwrap();
+    let entries = ws.list_glossary().await.unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].term, "Artifact");
 
-    ws.context.remove_glossary_entry("Artifact").await.unwrap();
-    assert!(ws.context.list_glossary().await.unwrap().is_empty());
+    ws.remove_glossary_entry("Artifact", agent("c")).await.unwrap();
+    assert!(ws.list_glossary().await.unwrap().is_empty());
 }
 
 // ────────────────────── change history ──────────────────────────
@@ -343,7 +337,7 @@ async fn test_history_records_operations() {
     ws.update_artifact(art.id, b"2".to_vec(), agent("b")).await.unwrap();
     ws.delete_artifact(art.id, agent("a")).await.unwrap();
 
-    let all = ws.history.read_all().await.unwrap();
+    let all = ws.read_history().await.unwrap();
     assert_eq!(all.len(), 3);
 
     // Check action types in order
@@ -351,7 +345,7 @@ async fn test_history_records_operations() {
     assert!(matches!(all[1].action, ChangeAction::Update));
     assert!(matches!(all[2].action, ChangeAction::Delete));
 
-    let recent = ws.history.read_recent(2).await.unwrap();
+    let recent = ws.read_recent_history(2).await.unwrap();
     assert_eq!(recent.len(), 2);
     assert!(matches!(recent[0].action, ChangeAction::Delete)); // newest first
 }
@@ -397,8 +391,7 @@ async fn test_reopen_preserves_data() {
         ws.create_artifact("persist.md".into(), ArtifactType::Design, agent("a"), b"data".to_vec())
             .await
             .unwrap();
-        ws.context
-            .add_decision("Keep it".into(), "Because".into(), agent("a"))
+        ws.add_decision("Keep it".into(), "Because".into(), agent("a"))
             .await
             .unwrap();
         ws.add_task(agent("a"), "do stuff".into()).await.unwrap();
@@ -408,18 +401,18 @@ async fn test_reopen_preserves_data() {
     {
         let ws = SharedWorkspace::open(&root).await.unwrap();
 
-        let arts = ws.artifacts.list(&ArtifactFilter::default()).await.unwrap();
+        let arts = ws.list_artifacts(&ArtifactFilter::default()).await.unwrap();
         assert_eq!(arts.len(), 1);
         assert_eq!(arts[0].name, "persist.md");
 
-        let decs = ws.context.list_decisions().await.unwrap();
+        let decs = ws.list_decisions().await.unwrap();
         assert_eq!(decs.len(), 1);
 
         let tasks = ws.list_tasks().await.unwrap();
         assert_eq!(tasks.len(), 1);
 
-        let history = ws.history.read_all().await.unwrap();
-        assert_eq!(history.len(), 2); // the create + add_task
+        let history = ws.read_history().await.unwrap();
+        assert_eq!(history.len(), 3); // create + add_decision + add_task
     }
 }
 
@@ -441,7 +434,7 @@ async fn test_artifact_serde_roundtrip() {
         .await
         .unwrap();
 
-    let fetched = ws.artifacts.get(art.id).await.unwrap().unwrap();
+    let fetched = ws.get_artifact(art.id).await.unwrap().unwrap();
     assert_eq!(fetched.content, binary_content);
 }
 
@@ -475,7 +468,7 @@ async fn test_version_conflict_rejected() {
     );
 
     // Conflict should be recorded in history
-    let history = ws.history.read_all().await.unwrap();
+    let history = ws.read_history().await.unwrap();
     let conflict_entries: Vec<_> = history
         .iter()
         .filter(|r| matches!(r.action, ChangeAction::Conflict))
@@ -552,7 +545,7 @@ async fn test_rollback_through_facade() {
     assert_eq!(rolled.content, b"v1");
 
     // History should contain the rollback entry
-    let history = ws.history.read_all().await.unwrap();
+    let history = ws.read_history().await.unwrap();
     let rollback_entries: Vec<_> = history
         .iter()
         .filter(|r| r.description.contains("rolled back"))
@@ -591,7 +584,7 @@ async fn test_context_via_facade_records_history() {
     ws.remove_glossary_entry("Agent", agent("c")).await.unwrap();
 
     // All context ops should be in history
-    let history = ws.history.read_all().await.unwrap();
+    let history = ws.read_history().await.unwrap();
     let context_entries: Vec<_> = history
         .iter()
         .filter(|r| matches!(r.action, ChangeAction::ContextUpdate))

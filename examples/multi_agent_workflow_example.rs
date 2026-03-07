@@ -14,9 +14,9 @@ use mofaclaw_core::{
     },
     load_config,
 };
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde_json::Value;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,7 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sessions = Arc::new(SessionManager::new(&config));
 
     // Create team manager and workflow engine
-    let team_manager = Arc::new(TeamManager::new(config.clone(), user_bus.clone(), sessions.clone()));
+    let team_manager = Arc::new(TeamManager::new(
+        config.clone(),
+        user_bus.clone(),
+        sessions.clone(),
+    ));
     let workflow_engine = Arc::new(WorkflowEngine::new());
 
     println!("Setting up code review workflow...");
@@ -38,7 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("tester".to_string(), "test-1".to_string()),
     ];
 
-    let team = match team_manager.create_team("workflow-team", "Workflow Team", roles).await {
+    let team = match team_manager
+        .create_team("workflow-team", "Workflow Team", roles)
+        .await
+    {
         Ok(t) => {
             println!("✓ Team created: {}", t.name);
             t
@@ -60,9 +67,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Execute the workflow
     println!("\nExecuting workflow...");
     let mut initial_context: HashMap<String, Value> = HashMap::new();
-    initial_context.insert("user_request".to_string(), Value::String("Implement a user authentication system with login and registration".to_string()));
-    
-    match workflow_engine.execute_workflow(workflow, team.clone(), initial_context).await {
+    initial_context.insert(
+        "user_request".to_string(),
+        Value::String(
+            "Implement a user authentication system with login and registration".to_string(),
+        ),
+    );
+
+    match workflow_engine
+        .execute_workflow(workflow, team.clone(), initial_context)
+        .await
+    {
         Ok(result) => {
             if result.success {
                 println!("✓ Workflow completed successfully!");

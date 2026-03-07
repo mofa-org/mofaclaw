@@ -127,8 +127,25 @@ impl AgentMessageBus {
             return true;
         }
 
-        // Broadcast messages are received by all agents
+        // Broadcast messages
         if message.is_broadcast() {
+            // If the message has a topic, only deliver it to agents subscribed to that topic.
+            // If there is no topic or no subscription information is available, fall back to
+            // delivering the broadcast to all agents (current behavior).
+            if let AgentMessageType::Broadcast { topic, .. } = &message.message_type {
+                if let Ok(subscriptions_guard) = self.topic_subscriptions.try_read() {
+                    if let Some(subscribers) = subscriptions_guard.get(topic) {
+                        // Check if this agent is subscribed to the topic
+                        let agent_id_str = agent_id.to_string();
+                        if subscribers.contains(&agent_id_str) {
+                            return true;
+                        }
+                        // If topic has subscribers but this agent isn't one, don't deliver
+                        return false;
+                    }
+                }
+            }
+            // No topic or no subscription info - deliver to all agents
             return true;
         }
 
@@ -228,12 +245,15 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Both agents should receive the broadcast
-        let msg1 = receiver1.try_recv().ok().or_else(|| {
-            tokio::runtime::Handle::current().block_on(async { receiver1.recv().await.ok() })
-        });
-        let msg2 = receiver2.try_recv().ok().or_else(|| {
-            tokio::runtime::Handle::current().block_on(async { receiver2.recv().await.ok() })
-        });
+        // Use timeout to avoid blocking in async context
+        let msg1 = tokio::time::timeout(tokio::time::Duration::from_millis(100), receiver1.recv())
+            .await
+            .ok()
+            .flatten();
+        let msg2 = tokio::time::timeout(tokio::time::Duration::from_millis(100), receiver2.recv())
+            .await
+            .ok()
+            .flatten();
 
         assert!(
             msg1.is_some() || msg2.is_some(),

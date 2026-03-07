@@ -76,7 +76,7 @@ fn default_payload_kind() -> String {
 }
 
 /// State of a cron job
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CronJobState {
     /// Next run time in milliseconds
     pub next_run_at_ms: Option<i64>,
@@ -88,16 +88,6 @@ pub struct CronJobState {
     pub last_error: Option<String>,
 }
 
-impl Default for CronJobState {
-    fn default() -> Self {
-        Self {
-            next_run_at_ms: None,
-            last_run_at_ms: None,
-            last_status: None,
-            last_error: None,
-        }
-    }
-}
 
 /// A cron job
 #[derive(Debug, Clone, Serialize, Deserialize)]

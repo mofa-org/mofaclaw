@@ -95,9 +95,19 @@ impl ContextBuilder {
             }
         }
 
+        // Add hub skills directory (where skills installed from hub are stored)
+        let mut search_dirs = vec![workspace_skills.clone()];
+        if let Some(home) = dirs::home_dir() {
+            let hub_skills_dir = home.join(".mofaclaw").join("skills").join("hub");
+            if hub_skills_dir.exists() {
+                search_dirs.push(hub_skills_dir);
+            }
+        }
+
         let skills = if let Some(builtin) = builtin_skills {
-            tracing::info!("Using both workspace and builtin skills");
-            let manager = SkillsManager::with_search_dirs(vec![workspace_skills.clone(), builtin])
+            tracing::info!("Using workspace, hub, and builtin skills");
+            search_dirs.push(builtin);
+            let manager = SkillsManager::with_search_dirs(search_dirs)
                 .unwrap_or_else(|_| SkillsManager::new(&workspace_skills).unwrap());
             // Log the number of skills found
             let all_metadata = manager.get_all_metadata();
@@ -107,8 +117,12 @@ impl ContextBuilder {
             }
             manager
         } else {
-            tracing::info!("No builtin skills found, using only workspace skills");
-            SkillsManager::new(&workspace_skills).unwrap()
+            tracing::info!("No builtin skills found, using workspace and hub skills");
+            let manager = SkillsManager::with_search_dirs(search_dirs)
+                .unwrap_or_else(|_| SkillsManager::new(&workspace_skills).unwrap());
+            let all_metadata = manager.get_all_metadata();
+            tracing::info!("Found {} skills", all_metadata.len());
+            manager
         };
 
         Self {

@@ -18,6 +18,7 @@ pub mod provider;
 pub mod python_env;
 pub mod rbac;
 pub mod session;
+pub mod skills;
 pub mod tools;
 pub mod types;
 
@@ -27,7 +28,7 @@ pub use bus::{InboundMessage, MessageBus, OutboundMessage};
 pub use channels::{Channel, ChannelManager, DingTalkChannel, FeishuChannel, TelegramChannel};
 pub use config::{
     AgentDefaults, AgentsConfig, ChannelsConfig, Config, DingTalkConfig, FeishuConfig,
-    GatewayConfig, ProviderConfig, ProvidersConfig, TelegramConfig, ToolsConfig,
+    GatewayConfig, ProviderConfig, ProvidersConfig, SkillsConfig, TelegramConfig, ToolsConfig,
     TranscriptionConfig, WebSearchConfig, WebToolsConfig, WhatsAppConfig, default_config,
     get_config_dir, get_config_path, get_data_dir, get_workspace_path, load_config, save_config,
 };
@@ -37,6 +38,7 @@ pub use heartbeat::HeartbeatService;
 pub use permissions::{PermissionLevel, PermissionManager};
 pub use provider::{GroqTranscriptionProvider, TranscriptionProvider};
 pub use python_env::PythonEnv;
+pub use skills::{SkillHubClient, SkillHubClientConfig};
 pub use session::{
     Session, SessionExt, SessionInfo, SessionManager, messages_to_session_messages,
     session_messages_to_messages,

@@ -355,6 +355,21 @@ pub struct TranscriptionConfig {
     pub groq_api_key: String,
 }
 
+/// Skills Hub configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SkillsConfig {
+    /// Hub catalog URL
+    #[serde(default = "default_hub_catalog_url")]
+    pub hub_url: String,
+    /// Auto-install skills on first invocation
+    #[serde(default)]
+    pub auto_install: bool,
+}
+
+fn default_hub_catalog_url() -> String {
+    "https://clawhub.run/api/skills/catalog".to_string()
+}
+
 /// Root configuration for Mofaclaw
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -370,6 +385,9 @@ pub struct Config {
     /// Gateway configuration
     #[serde(default)]
     pub gateway: GatewayConfig,
+    /// Skills configuration
+    #[serde(default)]
+    pub skills: SkillsConfig,
     /// Tools configuration
     #[serde(default)]
     pub tools: ToolsConfig,

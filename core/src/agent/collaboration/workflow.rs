@@ -41,9 +41,13 @@ pub struct WorkflowStep {
     pub role: String,
     /// Task prompt/description for the agent
     pub task_prompt: String,
-    /// Artifact IDs required before this step can run
+    /// Advisory metadata listing artifact IDs that this step conceptually
+    /// depends on. The workflow engine does not currently enforce the
+    /// existence of these artifacts before executing the step.
     pub required_artifacts: Vec<String>,
-    /// Artifact IDs this step will produce
+    /// Advisory metadata listing artifact IDs that this step is expected
+    /// to produce. The workflow engine does not automatically persist or
+    /// attach these artifacts to any workspace.
     pub produces_artifacts: Vec<String>,
     /// Whether approval is required before proceeding
     pub approval_required: bool,
@@ -563,7 +567,7 @@ pub fn create_code_review_workflow() -> Workflow {
                 required_artifacts: vec!["implementation".to_string()],
                 produces_artifacts: vec!["review_comments".to_string()],
                 approval_required: true,
-                approver_role: Some("reviewer".to_string()),
+                approver_role: Some("architect".to_string()),
                 timeout: None,
             },
             WorkflowStep {

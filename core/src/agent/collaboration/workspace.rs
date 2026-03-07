@@ -237,10 +237,19 @@ impl SharedWorkspace {
 
         info!("Creating artifact {} in workspace {}", id, self.team_id);
 
+        // Check if artifact already exists
+        let mut artifacts = self.artifacts.write().await;
+        if artifacts.contains_key(&id) {
+            return Err(crate::error::MofaclawError::Other(format!(
+                "Artifact with id {} already exists in workspace {}",
+                id, self.team_id
+            ))
+            .into());
+        }
+
         let artifact = Artifact::new(id.clone(), name, artifact_type, content, created_by);
 
         // Store artifact
-        let mut artifacts = self.artifacts.write().await;
         artifacts.insert(id.clone(), artifact.clone());
         drop(artifacts);
 

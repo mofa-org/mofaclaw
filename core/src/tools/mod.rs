@@ -9,6 +9,7 @@ pub mod message;
 pub mod registry;
 pub mod shell;
 pub mod spawn;
+pub mod videolize;
 pub mod web;
 
 pub use base::{ToolDefinition, ToolExecutor};
@@ -17,4 +18,5 @@ pub use message::MessageTool;
 pub use registry::{ToolRegistry, ToolRegistryExecutor};
 pub use shell::ExecTool;
 pub use spawn::{InMemorySubagentManager, SpawnTool, SubagentManager};
+pub use videolize::VideolizeTool;
 pub use web::{WebFetchTool, WebSearchTool};

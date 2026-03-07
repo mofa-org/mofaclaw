@@ -12,6 +12,7 @@ use crate::messages::{InboundMessage, OutboundMessage};
 use crate::session::{SessionExt, SessionManager};
 use crate::tools::filesystem::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 use crate::tools::shell::ExecTool;
+use crate::tools::videolize::VideolizeTool;
 use crate::tools::web::{WebFetchTool, WebSearchTool};
 use crate::tools::{MessageTool, SpawnTool, ToolRegistry, ToolRegistryExecutor};
 use std::sync::Arc;
@@ -155,7 +156,7 @@ impl AgentLoop {
     /// Register the default set of tools (without spawn tool)
     pub fn register_default_tools(
         registry: &mut ToolRegistry,
-        _workspace: &std::path::Path,
+        workspace: &std::path::Path,
         brave_api_key: Option<String>,
         bus: MessageBus,
     ) {
@@ -180,6 +181,9 @@ impl AgentLoop {
             Box::pin(async move { bus.publish_outbound(msg).await })
         }));
         registry.register(message_tool);
+
+        // Videolizer tool (full video pipeline)
+        registry.register(VideolizeTool::new(workspace));
     }
 
     /// Register spawn tool with subagent manager

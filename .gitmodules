@@ -1,0 +1,3 @@
+[submodule "third_party/videolizer"]
+	path = third_party/videolizer
+	url = https://github.com/GrimNej/videolizer.git

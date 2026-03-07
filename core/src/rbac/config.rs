@@ -155,6 +155,22 @@ impl RbacConfig {
                         op_perm.min_role, tool_name, op_name
                     ));
                 }
+
+                // Validate patterns to reject unsupported mid-pattern wildcards
+                for pattern in &op_perm.allowed {
+                    let tokens = shell_words::split(&pattern.to_lowercase()).map_err(|e| {
+                        format!("Invalid shell quotes in pattern '{}': {}", pattern, e)
+                    })?;
+
+                    for (i, token) in tokens.iter().enumerate() {
+                        if token == "*" && i != tokens.len() - 1 {
+                            return Err(format!(
+                                "Pattern '{}' for tool.{}.{} contains a mid-pattern wildcard, which is not supported. Use only trailing wildcards (e.g., 'command *')",
+                                pattern, tool_name, op_name
+                            ));
+                        }
+                    }
+                }
             }
         }
 
@@ -182,5 +198,62 @@ mod tests {
 
         config.default_role = "guest".to_string();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_mid_pattern_wildcard() {
+        let mut config = RbacConfig::default();
+        config.enabled = true;
+        config.roles.insert(
+            "member".to_string(),
+            RoleDefinition {
+                level: 1,
+                description: "Member".to_string(),
+            },
+        );
+
+        // Allowed trailing wildcard
+        let op1 = OperationPermission {
+            min_role: "member".to_string(),
+            path_whitelist: HashMap::new(),
+            path_blacklist: Vec::new(),
+            allowed: vec!["gh *".to_string()],
+        };
+
+        let mut tool_ops1 = HashMap::new();
+        tool_ops1.insert("safe_commands".to_string(), op1);
+        config.permissions.tools.insert(
+            "shell".to_string(),
+            ToolPermissionConfig {
+                operations: tool_ops1,
+            },
+        );
+
+        assert!(
+            config.validate().is_ok(),
+            "Trailing wildcards should be allowed"
+        );
+
+        // Disallowed mid-pattern wildcard
+        let op2 = OperationPermission {
+            min_role: "member".to_string(),
+            path_whitelist: HashMap::new(),
+            path_blacklist: Vec::new(),
+            allowed: vec!["gh * view".to_string()], // Mid-pattern!
+        };
+
+        let mut tool_ops2 = HashMap::new();
+        tool_ops2.insert("safe_commands".to_string(), op2);
+        config.permissions.tools.insert(
+            "shell".to_string(),
+            ToolPermissionConfig {
+                operations: tool_ops2,
+            },
+        );
+
+        assert!(
+            config.validate().is_err(),
+            "Mid-pattern wildcards should be rejected"
+        );
     }
 }

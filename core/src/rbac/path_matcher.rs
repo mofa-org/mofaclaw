@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use tracing::warn;
 
 /// Matcher for path whitelist/blacklist patterns
+#[derive(Debug, Clone)]
 pub struct PathMatcher {
     workspace: PathBuf,
     home: PathBuf,

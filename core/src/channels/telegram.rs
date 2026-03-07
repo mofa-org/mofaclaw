@@ -10,7 +10,12 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
-use teloxide::{net::Download, prelude::*, types::ChatId, types::ParseMode};
+use teloxide::{
+    dispatching::Dispatcher,
+    net::Download,
+    prelude::*,
+    types::{BotCommand, ChatAction, ChatId, ParseMode},
+};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -32,6 +37,7 @@ pub struct TelegramChannel {
     running: Arc<RwLock<bool>>,
     transcription_provider: Option<Arc<dyn TranscriptionProvider>>,
     media_dir: PathBuf,
+    dispatcher_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl TelegramChannel {
@@ -56,6 +62,7 @@ impl TelegramChannel {
             running: Arc::new(RwLock::new(false)),
             transcription_provider: None,
             media_dir,
+            dispatcher_handle: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -64,8 +71,8 @@ impl TelegramChannel {
         self.transcription_provider = Some(provider);
         self
     }
-    /// convert markdown to telegram-safe html
-    fn markdown_to_html(&self, text: &str) -> String {
+    /// convert markdown to telegram-safe html (static version for use in closures)
+    fn markdown_to_html_static(text: &str) -> String {
         let mut result = text.to_string();
 
         // escape html
@@ -101,6 +108,11 @@ impl TelegramChannel {
         result
     }
 
+    /// convert markdown to telegram-safe html
+    fn markdown_to_html(&self, text: &str) -> String {
+        Self::markdown_to_html_static(text)
+    }
+
     /// Send an outbound message
     pub async fn send(&self, msg: &OutboundMessage) -> Result<()> {
         let chat_id = msg
@@ -125,7 +137,7 @@ impl TelegramChannel {
     async fn download_media(
         bot: &Bot,
         info: &MediaInfo,
-        media_dir: &PathBuf,
+        media_dir: &std::path::Path,
         content_parts: &mut Vec<String>,
         media_paths: &mut Vec<String>,
         transcription_provider: Option<&dyn TranscriptionProvider>,
@@ -217,6 +229,7 @@ impl TelegramChannel {
             MediaType::Document => String::new(),
         }
     }
+
 }
 
 /// Media information from Telegram
@@ -245,6 +258,74 @@ impl MediaType {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TelegramConfig;
+
+    fn create_test_channel() -> TelegramChannel {
+        let config = TelegramConfig {
+            enabled: true,
+            token: "test-token".to_string(),
+            allow_from: Vec::new(),
+        };
+        let bus = MessageBus::new();
+        TelegramChannel::new(config, bus).expect("failed to create TelegramChannel")
+    }
+
+    #[test]
+    fn markdown_to_html_formats_basic_markdown() {
+        let channel = create_test_channel();
+
+        let input = "Hello **world** and __also bold__, _italic_ and [link](https://example.com)";
+        let html = channel.markdown_to_html(input);
+
+        // Basic HTML escaping
+        assert!(!html.contains("<script"), "HTML should be escaped");
+
+        // Bold / link conversions
+        assert!(
+            html.contains("<b>world</b>") && html.contains("<b>also bold</b>"),
+            "bold formatting should be converted"
+        );
+        assert!(
+            html.contains("<a href=\"https://example.com\">link</a>"),
+            "links should be converted"
+        );
+    }
+
+    #[test]
+    fn media_type_as_str_and_extension_are_consistent() {
+        // Photo
+        assert_eq!(MediaType::Photo.as_str(), "image");
+        assert_eq!(
+            TelegramChannel::get_extension(&MediaType::Photo, None),
+            ".jpg".to_string()
+        );
+
+        // Voice
+        assert_eq!(MediaType::Voice.as_str(), "voice");
+        assert_eq!(
+            TelegramChannel::get_extension(&MediaType::Voice, Some("audio/ogg")),
+            ".ogg".to_string()
+        );
+
+        // Audio
+        assert_eq!(MediaType::Audio.as_str(), "audio");
+        assert_eq!(
+            TelegramChannel::get_extension(&MediaType::Audio, Some("audio/mpeg")),
+            ".mp3".to_string()
+        );
+
+        // Document
+        assert_eq!(MediaType::Document.as_str(), "file");
+        assert_eq!(
+            TelegramChannel::get_extension(&MediaType::Document, None),
+            String::new()
+        );
+    }
+}
+
 #[async_trait]
 impl Channel for TelegramChannel {
     fn name(&self) -> &str {
@@ -259,20 +340,126 @@ impl Channel for TelegramChannel {
         let bus = self.bus.clone();
         let transcription_provider = self.transcription_provider.clone();
         let media_dir = self.media_dir.clone();
-        let _config = self.config.clone();
+        let allow_from = self.config.allow_from.clone();
 
         info!("Starting Telegram bot");
 
         // Create media directory if it doesn't exist
         tokio::fs::create_dir_all(&media_dir).await?;
 
-        // Clone for the move
-        let _bot_clone = Arc::clone(&bot);
+        // Set up bot commands menu
+        let commands = vec![
+            BotCommand::new("start", "Show welcome message"),
+            BotCommand::new("help", "Show help information"),
+        ];
+        if let Err(e) = bot.set_my_commands(commands).await {
+            warn!("Failed to set bot commands menu: {}", e);
+        }
 
-        // Set up message handler - using teloxide's Dispatcher
-        let _handler = move |msg: Message, bot: Arc<Bot>| async move {
-            if let Some(user) = msg.from.as_ref() {
+        // Set up message handler function
+        let handler = move |msg: Message, bot: Bot| {
+            let bus = bus.clone();
+            let transcription_provider = transcription_provider.clone();
+            let media_dir = media_dir.clone();
+            let allow_from = allow_from.clone();
+
+            async move {
+                // Get user info - skip if missing or bot
+                let user = match msg.from.as_ref() {
+                    Some(u) if u.is_bot => {
+                        debug!("Ignoring message from bot user {:?}", u.id.0);
+                        return respond(());
+                    }
+                    Some(u) => u,
+                    None => {
+                        debug!("Message without user info, skipping");
+                        return respond(());
+                    }
+                };
+
+                // Check allow_from list (security: enforce access control)
+                let user_id_str = user.id.0.to_string();
+                let username = user.username.as_deref();
+                if !allow_from.is_empty() {
+                    let allowed = allow_from.contains(&user_id_str)
+                        || username
+                            .map(|u| allow_from.contains(&u.to_string()))
+                            .unwrap_or(false);
+                    if !allowed {
+                        debug!(
+                            "Ignoring message from unauthorized user: {} ({})",
+                            user_id_str,
+                            username.unwrap_or("no username")
+                        );
+                        return respond(());
+                    }
+                }
+
                 debug!("Telegram message from {:?}", user.id.0);
+
+                let chat_id = msg.chat.id.0.to_string();
+
+                // Show typing indicator while processing
+                let _ = bot
+                    .send_chat_action(ChatId(msg.chat.id.0), ChatAction::Typing)
+                    .await;
+
+                // Handle commands - parse properly to handle /start foo and /help@botname
+                if let Some(text) = msg.text() {
+                    // Parse command (handles /command@botname and /command args)
+                    let cmd = if let Some(cmd_text) = text.strip_prefix('/') {
+                        let end = cmd_text
+                            .find(' ')
+                            .or_else(|| cmd_text.find('@'))
+                            .unwrap_or(cmd_text.len());
+                        Some(cmd_text[..end].to_lowercase())
+                    } else {
+                        None
+                    };
+                    if let Some(cmd) = cmd {
+                        match cmd.as_str() {
+                            "start" => {
+                                let welcome_msg = "👋 Welcome to mofaclaw!\n\n\
+                                    I'm your agent assistant. Just send me a message and I'll process it.\n\n\
+                                    Use /help for more information.";
+                                if let Err(e) =
+                                    bot.send_message(ChatId(msg.chat.id.0), welcome_msg).await
+                                {
+                                    error!("Failed to send welcome message: {}", e);
+                                }
+                                return respond(());
+                            }
+                            "help" => {
+                                let help_markdown = "📖 **Help**\n\n\
+                                        **How to use:**\n\
+                                        Just send me any message and I'll forward it to the mofaclaw agent for processing.\n\n\
+                                        **Supported:**\n\
+                                        • Text messages\n\
+                                        • Photos with captions\n\
+                                        • Voice messages (transcribed if available)\n\
+                                        • Audio files\n\
+                                        • Documents\n\n\
+                                        **Commands:**\n\
+                                        /start - Show welcome message\n\
+                                        /help - Show this help message\n\n\
+                                        Responses will be sent back to this chat.";
+                                // Convert markdown to HTML for reliable parsing
+                                let help_html = Self::markdown_to_html_static(help_markdown);
+                                if let Err(e) = bot
+                                    .send_message(ChatId(msg.chat.id.0), help_html)
+                                    .parse_mode(ParseMode::Html)
+                                    .await
+                                {
+                                    error!("Failed to send help message: {}", e);
+                                }
+                                return respond(());
+                            }
+                            _ => {
+                                // Unknown command, continue to process as regular message
+                            }
+                        }
+                    }
+                }
 
                 // Convert to InboundMessage
                 let sender_id = if let Some(username) = &user.username {
@@ -280,8 +467,6 @@ impl Channel for TelegramChannel {
                 } else {
                     user.id.0.to_string()
                 };
-
-                let chat_id = msg.chat.id.0.to_string();
 
                 // Build content from text and/or media
                 let mut content_parts = Vec::new();
@@ -327,8 +512,8 @@ impl Channel for TelegramChannel {
                     });
 
                 // Download media if present
-                if let Some(info) = media_file {
-                    if let Err(e) = Self::download_media(
+                if let Some(info) = media_file
+                    && let Err(e) = Self::download_media(
                         &bot,
                         &info,
                         &media_dir,
@@ -337,11 +522,9 @@ impl Channel for TelegramChannel {
                         transcription_provider.as_deref(),
                     )
                     .await
-                    {
-                        warn!("Failed to download media: {}", e);
-                        content_parts
-                            .push(format!("[{}: download failed]", info.media_type.as_str()));
-                    }
+                {
+                    warn!("Failed to download media: {}", e);
+                    content_parts.push(format!("[{}: download failed]", info.media_type.as_str()));
                 }
 
                 let content = if content_parts.is_empty() {
@@ -349,6 +532,25 @@ impl Channel for TelegramChannel {
                 } else {
                     content_parts.join("\n")
                 };
+
+                // Better empty message handling - provide user feedback
+                if content == "[empty message]" && media_paths.is_empty() {
+                    debug!(
+                        "Received empty message from {} in chat {}",
+                        sender_id, chat_id
+                    );
+                    let empty_msg = "I didn't receive any content in your message.\n\n\
+                        Please send:\n\
+                        • Text message\n\
+                        • Photo with caption\n\
+                        • Voice/audio message\n\
+                        • Document\n\n\
+                        Use /help for more information.";
+                    if let Err(e) = bot.send_message(ChatId(msg.chat.id.0), empty_msg).await {
+                        error!("Failed to send empty message feedback: {}", e);
+                    }
+                    return respond(());
+                }
 
                 debug!("Telegram message from {}: {}", sender_id, content);
 
@@ -358,18 +560,39 @@ impl Channel for TelegramChannel {
 
                 if let Err(e) = bus.publish_inbound(inbound_msg).await {
                     error!("Failed to publish message to bus: {}", e);
+                    // Send user-friendly error feedback
+                    let error_msg = "Sorry, I encountered an error processing your message. Please try again later.";
+                    if let Err(e2) = bot.send_message(ChatId(msg.chat.id.0), error_msg).await {
+                        error!("Failed to send error feedback: {}", e2);
+                    }
                 }
-            }
 
-            respond(())
+                respond(())
+            }
         };
 
-        // In a real implementation, we'd set up the dispatcher here
-        // For now, just mark as running and log
-        info!("Telegram bot started");
+        // Set up dispatcher with message handler
+        let mut dispatcher = Dispatcher::builder(
+            bot.as_ref().clone(),
+            Update::filter_message().endpoint(handler),
+        )
+        .build();
 
-        // Keep the loop running
-        while *running.read().await {
+        // Spawn dispatcher task
+        let running_clone = Arc::clone(&running);
+        let dispatcher_handle = tokio::spawn(async move {
+            info!("Telegram dispatcher started");
+            dispatcher.dispatch().await;
+            info!("Telegram dispatcher stopped");
+        });
+
+        // Store dispatcher handle for graceful shutdown
+        *self.dispatcher_handle.write().await = Some(dispatcher_handle);
+
+        info!("Telegram bot started and listening for messages");
+
+        // Wait for stop signal
+        while *running_clone.read().await {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
 
@@ -378,6 +601,29 @@ impl Channel for TelegramChannel {
 
     async fn stop(&self) -> Result<()> {
         *self.running.write().await = false;
+
+        // Cancel dispatcher task gracefully and wait for it to finish
+        let mut handle_guard = self.dispatcher_handle.write().await;
+        if let Some(handle) = handle_guard.take() {
+            // Request cancellation and wait for the dispatcher task to finish
+            handle.abort();
+            match handle.await {
+                Ok(_) => {
+                    // Dispatcher finished normally after abort request
+                    debug!("Telegram dispatcher task finished");
+                }
+                Err(e) if e.is_cancelled() => {
+                    // Expected cancellation error after abort; ignore
+                    debug!("Telegram dispatcher task cancelled");
+                }
+                Err(e) => {
+                    // Log unexpected join error
+                    error!("Telegram dispatcher task join error: {}", e);
+                }
+            }
+            info!("Telegram dispatcher task stopped");
+        }
+
         info!("Stopping Telegram bot");
         Ok(())
     }

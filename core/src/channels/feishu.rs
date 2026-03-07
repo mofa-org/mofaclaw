@@ -9,6 +9,7 @@ use crate::config::FeishuConfig;
 use crate::error::{ChannelError, Result};
 use crate::messages::InboundMessage;
 use crate::python_env::PythonEnv;
+use crate::rbac::{RbacManager, Role};
 use async_trait::async_trait;
 use futures_util::{SinkExt, stream::StreamExt};
 use serde_json::Value;
@@ -27,16 +28,14 @@ use tracing::{error, info, warn};
 /// Python bridge code embedded in Rust
 const PYTHON_BRIDGE_CODE: &str = r#"
 import asyncio
+import collections
 import json
 import sys
 import os
-import hashlib
-import base64
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+import threading
 import websockets
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
-from lark_oapi.api.im.v1 import ReceiveMessageEvent
 import logging
 
 # Configure logging
@@ -46,12 +45,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global variables for communication
+# ── Global state ──────────────────────────────────────────────────────────────
+# WebSocket connection back to Rust (set when Rust connects to our server)
 websocket_ref = None
-feishu_client = None
+# The asyncio event loop shared by ws_server_task and event_subscription_task
+main_loop = None
+# Feishu API client (for outbound messages, initialised on first Rust connection)
+feishu_handler = None
 
+# ── Message queue (for messages arriving before Rust connects) ────────────────
+# maxlen=50 automatically discards the oldest entry when the deque is full.
+inbound_queue: collections.deque = collections.deque(maxlen=50)
+queue_lock = threading.Lock()
+
+
+class BridgeConfig:
+    """Access-control config set once at startup; never mutated afterwards."""
+    __slots__ = ("dm_policy", "group_policy", "typing_indicator")
+
+    def __init__(self, dm_policy="open", group_policy="open", typing_indicator=False):
+        self.dm_policy = dm_policy
+        self.group_policy = group_policy
+        self.typing_indicator = typing_indicator
+
+
+# Populated in run_feishu_client() before any event can arrive
+bridge_config = BridgeConfig()
+
+
+# ── Feishu API helper (outbound) ──────────────────────────────────────────────
 class FeishuEventHandler:
-    """Handler for Feishu events"""
+    """Wraps the lark-oapi REST client for outbound message sending."""
 
     def __init__(self, app_id, app_secret, encrypt_key=None, verify_token=None):
         self.app_id = app_id
@@ -62,10 +86,6 @@ class FeishuEventHandler:
 
     def create_client(self):
         """Create lark-oapi client"""
-        credential = lark.api.auth.AppAccessTokenCredential(
-            self.app_id,
-            self.app_secret
-        )
         self.client = lark.Client.builder() \
             .app_id(self.app_id) \
             .app_secret(self.app_secret) \
@@ -116,99 +136,142 @@ class FeishuEventHandler:
             logger.error(f"Error sending message: {e}")
             return False, str(e)
 
-class EventDispatcher:
-    """Event dispatcher for Feishu events"""
 
-    def __init__(self):
-        self.handlers = {}
+# ── Inbound event handler (called from lark-oapi long-connection thread) ──────
+def handle_message_event(data):
+    """
+    Called by lark-oapi's ws.Client for every im.message.receive_v1 event.
+    `data` is a P2ImMessageReceiveV1 object.
 
-    def register(self, event_type, handler):
-        """Register event handler"""
-        if event_type not in self.handlers:
-            self.handlers[event_type] = []
-        self.handlers[event_type].append(handler)
-
-    def dispatch(self, event_type, data):
-        """Dispatch event to handlers"""
-        handlers = self.handlers.get(event_type, [])
-        for handler in handlers:
-            try:
-                handler(data)
-            except Exception as e:
-                logger.error(f"Error in handler: {e}")
-
-# Global event dispatcher and handler
-event_dispatcher = EventDispatcher()
-feishu_handler = None
-
-def handle_message_event(event):
-    """Handle received message event"""
-    global websocket_ref
+    This function runs in a thread-pool thread (not the asyncio event loop),
+    so WebSocket sends are scheduled via asyncio.run_coroutine_threadsafe().
+    """
+    global websocket_ref, main_loop, bridge_config
 
     try:
-        # Extract message data
+        event = data.event
+        if event is None:
+            return
+
+        # ── Sender ────────────────────────────────────────────────────────────
         sender_id = ""
+        sender_type = ""
+        if event.sender:
+            sid = event.sender.sender_id
+            if sid:
+                # Prefer user_id; fall back through open_id → union_id
+                sender_id = (
+                    sid.user_id
+                    or sid.open_id
+                    or getattr(sid, 'union_id', None)
+                    or ""
+                )
+            sender_type = getattr(event.sender, 'sender_type', '') or ""
+
+        # Drop bot messages (including replies from this bot) to prevent loops
+        if sender_type == "bot":
+            logger.debug("Ignoring bot message to prevent reply loop")
+            return
+
+        # ── Message fields ────────────────────────────────────────────────────
+        msg = event.message
+        if msg is None:
+            return
+
+        message_id  = getattr(msg, 'message_id', '') or ""
+        chat_id     = getattr(msg, 'chat_id',    '') or ""
+        chat_type   = getattr(msg, 'chat_type',  '') or ""
+        msg_type    = getattr(msg, 'msg_type',   'text') or "text"
+        content_str = getattr(msg, 'content',    '') or ""
+
+        # ── Access control ────────────────────────────────────────────────────
+        if chat_type == "p2p" and bridge_config.dm_policy == "restricted":
+            logger.info(f"Blocked DM from {sender_id!r} (dm_policy=restricted)")
+            return
+        if chat_type == "group" and bridge_config.group_policy == "restricted":
+            logger.info(f"Blocked group message from {sender_id!r} (group_policy=restricted)")
+            return
+
+        # ── Parse content JSON ────────────────────────────────────────────────
         content = ""
-        chat_id = ""
-        message_type = ""
-
-        # Try different event structures
-        if hasattr(event, 'sender'):
-            if hasattr(event.sender, 'sender_id'):
-                if hasattr(event.sender.sender_id, 'user_id'):
-                    sender_id = event.sender.sender_id.user_id
-                elif hasattr(event.sender.sender_id, 'open_id'):
-                    sender_id = event.sender.sender_id.open_id
-
-        # Extract message content
-        if hasattr(event, 'message'):
-            msg = event.message
-            if hasattr(msg, 'message_id'):
-                message_id = msg.message_id
-            if hasattr(msg, 'chat_id'):
-                chat_id = msg.chat_id
-            if hasattr(msg, 'chat_type'):
-                chat_type = msg.chat_type
-            if hasattr(msg, 'content'):
-                content_str = msg.content
-                try:
-                    content_data = json.loads(content_str)
-                    if 'text' in content_data:
-                        content = content_data['text']
-                    else:
-                        content = content_str
-                except:
+        if content_str:
+            try:
+                content_data = json.loads(content_str)
+                if isinstance(content_data, dict):
+                    content = content_data.get('text', content_str)
+                else:
                     content = content_str
-            if hasattr(msg, 'msg_type'):
-                message_type = msg.msg_type
+            except (json.JSONDecodeError, ValueError):
+                content = content_str
 
-        logger.info(f"Received Feishu message from {sender_id}: {content[:100]}")
+        # Drop empty / whitespace-only messages
+        if not content.strip():
+            logger.debug(f"Ignoring empty message from {sender_id!r}")
+            return
+
+        logger.info(f"Received Feishu message from {sender_id!r}: {content[:100]}")
 
         message_data = {
-            "type": "message",
-            "sender": sender_id,
-            "content": content,
-            "chatId": chat_id,
-            "messageType": message_type,
-            "messageId": message_id,
-            "chatType": chat_type if 'chat_type' in locals() else "",
+            "type":        "message",
+            "sender":      sender_id,
+            "content":     content,
+            "chatId":      chat_id,
+            "messageType": msg_type,
+            "messageId":   message_id,
+            "chatType":    chat_type,
         }
 
-        # Send to Rust via WebSocket if connected
-        if websocket_ref:
+        # ── Typing indicator ──────────────────────────────────────────────────
+        # Feishu has no native typing API; send a brief acknowledgment text so
+        # the user knows their message was received and is being processed.
+        # Only fires when the Rust side is already connected (feishu_handler
+        # is initialised in handle_websocket).
+        if bridge_config.typing_indicator and feishu_handler is not None and chat_id:
             try:
-                asyncio.create_task(websocket_ref.send(json.dumps(message_data)))
-                logger.info(f"Forwarded message to Rust: {content[:50]}")
-            except Exception as e:
-                logger.error(f"Failed to send message via WebSocket: {e}")
+                feishu_handler.send_message(
+                    "chat_id", chat_id, "text",
+                    "⏳ 正在处理中，请稍候... / Processing, please wait...",
+                )
+            except Exception as ti_err:
+                logger.debug(f"Could not send typing indicator: {ti_err}")
+
+        # ── Forward to Rust ───────────────────────────────────────────────────
+        # Schedule the async send on the main event loop with a 5 s timeout so
+        # a slow Rust side never blocks the lark-oapi receiver thread forever.
+        if websocket_ref is not None and main_loop is not None and main_loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                websocket_ref.send(json.dumps(message_data)),
+                main_loop,
+            )
+            try:
+                future.result(timeout=5.0)
+                logger.info(f"Forwarded message to Rust: {content[:50]!r}")
+            except Exception as fwd_err:
+                logger.error(f"Failed to forward message to Rust: {fwd_err}")
+                # ── Error feedback: WebSocket forward failed ──────────────────
+                if feishu_handler is not None and chat_id:
+                    try:
+                        feishu_handler.send_message(
+                            "chat_id", chat_id, "text",
+                            "❌ 消息转发失败，请稍后重试。\n"
+                            "Message forwarding failed. Please try again later.",
+                        )
+                    except Exception:
+                        pass
         else:
-            logger.warning("WebSocket not connected, message not forwarded")
+            # ── Message queuing: Rust not yet connected ───────────────────────
+            # Keep the message so it can be replayed when Rust reconnects.
+            # The deque's maxlen cap ensures we never queue more than 50 items.
+            with queue_lock:
+                inbound_queue.append(message_data)
+                logger.info(
+                    f"Rust not connected — queued message "
+                    f"(queue {len(inbound_queue)}/{inbound_queue.maxlen})"
+                )
 
     except Exception as e:
         logger.error(f"Error handling message event: {e}", exc_info=True)
 
-# Register message handler
-event_dispatcher.register("im.message.receive_v1", handle_message_event)
 
 async def handle_websocket(app_id, app_secret, encrypt_key, verify_token):
     """Handle incoming WebSocket connection from Rust"""
@@ -219,6 +282,24 @@ async def handle_websocket(app_id, app_secret, encrypt_key, verify_token):
     # Initialize Feishu handler
     feishu_handler = FeishuEventHandler(app_id, app_secret, encrypt_key, verify_token)
     feishu_handler.create_client()
+
+    # ── Flush messages queued while Rust was disconnected ────────────────────
+    flushed_count = 0
+    while True:
+        with queue_lock:
+            if not inbound_queue:
+                break
+            queued_msg = inbound_queue.popleft()
+        try:
+            await websocket_ref.send(json.dumps(queued_msg))
+            flushed_count += 1
+        except Exception as flush_err:
+            logger.error(f"Failed to flush queued message: {flush_err}")
+            with queue_lock:
+                inbound_queue.appendleft(queued_msg)  # Re-queue on failure
+            break
+    if flushed_count:
+        logger.info(f"Flushed {flushed_count} queued message(s) to Rust")
 
     # Keep connection alive and handle any commands from Rust
     try:
@@ -280,62 +361,106 @@ async def handle_websocket(app_id, app_secret, encrypt_key, verify_token):
         websocket_ref = None
 
 async def event_subscription_task(app_id, app_secret, encrypt_key, verify_token):
-    """Event subscription task using long connection"""
-    global feishu_handler
+    """
+    Establish and maintain a lark-oapi long-connection (persistent WebSocket to
+    Feishu's event-subscription service) and dispatch im.message.receive_v1
+    events to handle_message_event().
 
-    try:
-        # Create client for event subscription
-        client = lark.Client.builder() \
-            .app_id(app_id) \
-            .app_secret(app_secret) \
-            .log_level(lark.LogLevel.INFO) \
-            .build()
+    lark-oapi's ws.Client.start() is blocking and handles reconnection
+    internally, so we run it in a thread-pool executor.  If it ever returns
+    or raises, we restart it after an exponential back-off.
+    """
+    global main_loop
+    main_loop = asyncio.get_running_loop()  # Set early to prevent race condition
+    
+    logger.info("Starting Feishu event subscription (long-connection mode)...")
 
-        logger.info("Starting Feishu event subscription...")
+    # Build the lark-oapi event dispatcher bound to our handler
+    event_handler = (
+        lark.EventDispatcherHandler
+        .builder(encrypt_key or "", verify_token or "")
+        .register_p2_im_message_receive_v1(handle_message_event)
+        .build()
+    )
 
-        # For long connection mode, we would use the event dispatcher
-        # This is a simplified version that polls for events
-        while True:
-            await asyncio.sleep(30)
-            # Event handling would be done via event dispatcher callback
-            # In production, you'd set up the event subscription endpoint
+    # Create the WebSocket long-connection client once; it manages its own
+    # internal reconnection logic.
+    ws_client = lark.ws.Client(
+        app_id,
+        app_secret,
+        event_handler=event_handler,
+        log_level=lark.LogLevel.INFO,
+    )
 
-    except Exception as e:
-        logger.error(f"Event subscription error: {e}")
+    loop = asyncio.get_running_loop()
+    backoff = 1
+    max_backoff = 60
 
-def run_feishu_client(app_id, app_secret, encrypt_key, verify_token, port=3004):
-    """Run the Feishu client with WebSocket server"""
-    import logging
+    while True:
+        try:
+            logger.info("Connecting to Feishu event-subscription service...")
+            # Run the blocking ws_client.start() in a thread-pool executor so
+            # the asyncio event loop (and the WebSocket server task) stays live.
+            await loop.run_in_executor(None, ws_client.start)
+            # start() returned cleanly (rare) — reconnect immediately
+            logger.warning("Feishu long connection ended unexpectedly, reconnecting...")
+            backoff = 1
+        except asyncio.CancelledError:
+            logger.info("Event subscription task cancelled, stopping.")
+            break
+        except Exception as e:
+            logger.error(f"Event subscription error: {e}", exc_info=True)
+            logger.info(f"Reconnecting in {backoff}s...")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
+def run_feishu_client(
+    app_id, app_secret, encrypt_key, verify_token,
+    dm_policy="open", group_policy="open", typing_indicator=False, port=3004
+):
+    """
+    Run the Feishu bridge: WebSocket server (for Rust ↔ Python IPC) and
+    lark-oapi long-connection event subscription run concurrently in the same
+    asyncio event loop via asyncio.gather().
+    """
     import threading
 
-    logger = logging.getLogger(__name__)
+    # Apply config before any event can arrive
+    bridge_config.dm_policy = dm_policy
+    bridge_config.group_policy = group_policy
+    bridge_config.typing_indicator = typing_indicator
 
     def run_client():
-        import asyncio
-
         async def ws_server_task():
+            """Accept a single Rust connection and proxy messages."""
             global websocket_ref
-            ws_port = port
 
-            # Create handler that can access credentials
             async def handler_with_client(websocket):
                 global websocket_ref
                 websocket_ref = websocket
                 await handle_websocket(app_id, app_secret, encrypt_key, verify_token)
 
-            ws_server = await websockets.serve(handler_with_client, "127.0.0.1", ws_port)
-            logger.info(f"WebSocket server listening on 127.0.0.1:{ws_port}")
-            # Keep the server running
+            ws_server = await websockets.serve(handler_with_client, "127.0.0.1", port)
+            logger.info(f"WebSocket server listening on 127.0.0.1:{port}")
             await ws_server.wait_closed()
 
-        # Run WebSocket server
-        asyncio.run(ws_server_task())
+        async def main_tasks():
+            """Run WebSocket server and event subscription concurrently."""
+            # Set main_loop here — before either task starts — so
+            # handle_message_event() can always find it, even if the first
+            # Feishu event arrived unusually early.
+            global main_loop
+            main_loop = asyncio.get_running_loop()
+            await asyncio.gather(
+                ws_server_task(),
+                event_subscription_task(app_id, app_secret, encrypt_key, verify_token),
+            )
 
-    # Run in a new thread
+        asyncio.run(main_tasks())
+
     thread = threading.Thread(target=run_client, daemon=True)
     thread.start()
 
-    # Keep main thread alive
     try:
         thread.join()
     except KeyboardInterrupt:
@@ -343,17 +468,27 @@ def run_feishu_client(app_id, app_secret, encrypt_key, verify_token, port=3004):
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python bridge.py <app_id> <app_secret> [encrypt_key] [verify_token] [port]", file=sys.stderr)
+        print(
+            "Usage: python bridge.py <app_id> <app_secret> "
+            "[encrypt_key] [verify_token] [dm_policy] [group_policy] [typing_indicator] [port]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    app_id = sys.argv[1]
-    app_secret = sys.argv[2]
-    encrypt_key = sys.argv[3] if len(sys.argv) > 3 else None
-    verify_token = sys.argv[4] if len(sys.argv) > 4 else None
-    port = int(sys.argv[5]) if len(sys.argv) > 5 else 3004
+    app_id           = sys.argv[1]
+    app_secret       = sys.argv[2]
+    encrypt_key      = sys.argv[3] if len(sys.argv) > 3 else ""
+    verify_token     = sys.argv[4] if len(sys.argv) > 4 else ""
+    dm_policy        = sys.argv[5] if len(sys.argv) > 5 else "open"
+    group_policy     = sys.argv[6] if len(sys.argv) > 6 else "open"
+    typing_indicator = sys.argv[7].lower() in ("true", "1") if len(sys.argv) > 7 else False
+    port             = int(sys.argv[8]) if len(sys.argv) > 8 else 3004
 
     try:
-        run_feishu_client(app_id, app_secret, encrypt_key, verify_token, port)
+        run_feishu_client(
+            app_id, app_secret, encrypt_key, verify_token,
+            dm_policy, group_policy, typing_indicator, port,
+        )
     except KeyboardInterrupt:
         print("\\nFeishu bridge stopped")
     except Exception as e:
@@ -375,6 +510,8 @@ pub struct FeishuChannel {
     outbound_tx: Arc<RwLock<Option<mpsc::Sender<String>>>>,
     /// Handle to the Python subprocess for proper shutdown
     python_child: Arc<Mutex<Option<TokioChild>>>,
+    /// Optional RBAC manager for role-based access control
+    rbac: Option<Arc<RbacManager>>,
 }
 
 impl FeishuChannel {
@@ -388,7 +525,14 @@ impl FeishuChannel {
             bridge_port: 3004, // Default port for Python bridge WebSocket
             outbound_tx: Arc::new(RwLock::new(None)),
             python_child: Arc::new(Mutex::new(None)),
+            rbac: None,
         }
+    }
+
+    /// Attach an RBAC manager for role-based access control
+    pub fn with_rbac(mut self, rbac: Arc<RbacManager>) -> Self {
+        self.rbac = Some(rbac);
+        self
     }
 
     /// Check if connected to the bridge
@@ -451,13 +595,22 @@ impl FeishuChannel {
             bridge_port
         );
 
+        let dm_policy = self.config.dm_policy.clone();
+        let group_policy = self.config.group_policy.clone();
+        let typing_indicator = self.config.typing_indicator;
+
         // Spawn Python process
+        // Arg order must match main() in PYTHON_BRIDGE_CODE:
+        //   app_id  app_secret  encrypt_key  verify_token  dm_policy  group_policy  typing_indicator  port
         let child = match TokioCommand::new(&python_cmd_str)
             .arg(&python_path)
             .arg(&app_id)
             .arg(&app_secret)
             .arg(&encrypt_key)
             .arg(&verification_token)
+            .arg(&dm_policy)
+            .arg(&group_policy)
+            .arg(typing_indicator.to_string())
             .arg(bridge_port.to_string())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -600,6 +753,7 @@ impl Channel for FeishuChannel {
         let bridge_port = self.bridge_port;
         let outbound_tx = Arc::clone(&self.outbound_tx);
         let message_type = self.config.message_type.clone();
+        let rbac = self.rbac.clone();
 
         // Wait for bridge to be ready
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -691,6 +845,12 @@ impl Channel for FeishuChannel {
                                                 metadata.insert("message_type".to_string(), Value::String(message_type.to_string()));
                                                 metadata.insert("message_id".to_string(), Value::String(message_id.to_string()));
                                                 metadata.insert("chat_type".to_string(), Value::String(chat_type.to_string()));
+
+                                                // Attach RBAC role to metadata when available
+                                                if let Some(ref rbac_mgr) = rbac {
+                                                    let role: Role = rbac_mgr.get_role_from_feishu(sender, &[]);
+                                                    metadata.insert("role".to_string(), Value::String(role.as_str().to_string()));
+                                                }
 
                                                 let msg = InboundMessage::with_metadata(
                                                     "feishu",

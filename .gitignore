@@ -22,9 +22,6 @@ docs/
 # test files
 test_weather_format
 
-# Local context files (do not commit)
+# Local context files 
 Clip-Forge/
-Infinite_Content_Scale.pdf
-issue5.md
-pr-github-integration.md
-role-pr.md
+extra_files/

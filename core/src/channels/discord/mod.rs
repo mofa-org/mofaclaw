@@ -4,7 +4,7 @@ pub mod components;
 
 use super::base::Channel;
 use crate::bus::MessageBus;
-use crate::config::DiscordConfig;
+use crate::config::{DiscordConfig, SkillsConfig};
 use crate::error::{ChannelError, Result};
 use crate::get_workspace_path;
 use crate::messages::InboundMessage;
@@ -22,11 +22,16 @@ pub struct Data {
     pub bus: MessageBus,
     /// discord configuration
     pub config: DiscordConfig,
+    /// root skills configuration
+    pub skills_config: SkillsConfig,
+    /// skills hub client
+    pub hub_client: std::sync::Arc<crate::skills::SkillHubClient>,
 }
 
 /// discord channel using serenity and poise
 pub struct DiscordChannel {
     config: DiscordConfig,
+    skills_config: SkillsConfig,
     bus: MessageBus,
     running: Arc<RwLock<bool>>,
     http: Arc<RwLock<Option<Arc<serenity::Http>>>>,
@@ -84,13 +89,18 @@ pub enum PrReviewAction {
 
 impl DiscordChannel {
     /// create new discord channel
-    pub fn new(config: DiscordConfig, bus: MessageBus) -> Result<Self> {
-        Self::with_rbac(config, bus, None)
+    pub fn new(
+        config: DiscordConfig,
+        skills_config: SkillsConfig,
+        bus: MessageBus,
+    ) -> Result<Self> {
+        Self::with_rbac(config, skills_config, bus, None)
     }
 
     /// create new discord channel with RBAC manager
     pub fn with_rbac(
         config: DiscordConfig,
+        skills_config: SkillsConfig,
         bus: MessageBus,
         rbac_manager: Option<Arc<RbacManager>>,
     ) -> Result<Self> {
@@ -102,6 +112,7 @@ impl DiscordChannel {
 
         Ok(Self {
             config,
+            skills_config,
             bus,
             running: Arc::new(RwLock::new(false)),
             http: Arc::new(RwLock::new(None)),
@@ -160,6 +171,7 @@ impl DiscordChannel {
 
         Self {
             config,
+            skills_config: ctx.data().skills_config.clone(),
             bus: ctx.data().bus.clone(),
             running: Arc::new(RwLock::new(true)),
             http: Arc::new(RwLock::new(None)),
@@ -893,28 +905,113 @@ async fn tmux(
     Ok(())
 }
 
-/// skill action enum
-#[derive(Debug, poise::ChoiceParameter)]
-pub enum SkillAction {
-    #[name = "create"]
-    Create,
-    #[name = "update"]
-    Update,
-    #[name = "list"]
-    List,
-    #[name = "view"]
-    View,
+/// skill command group (parent - no direct invocation)
+#[poise::command(
+    slash_command,
+    subcommands(
+        "skill_create",
+        "skill_update",
+        "skill_list_local",
+        "skill_view",
+        "skill_search",
+        "skill_install",
+        "skill_hub_list",
+        "skill_remove"
+    )
+)]
+async fn skill(
+    _ctx: poise::Context<'_, Data, DiscordError>,
+) -> std::result::Result<(), DiscordError> {
+    Ok(())
 }
 
-/// skill command (skill-creator)
+/// Create a new skill (admin only)
 #[poise::command(slash_command)]
-async fn skill(
+async fn skill_create(
     ctx: poise::Context<'_, Data, DiscordError>,
-    #[description = "action type"] action: SkillAction,
     #[description = "skill name"] name: Option<String>,
     #[description = "skill description"] description: Option<String>,
 ) -> std::result::Result<(), DiscordError> {
-    // show typing indicator
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
+    let roles = DiscordChannel::get_user_roles(ctx.guild_id(), ctx.http(), ctx.author().id).await;
+    let channel = DiscordChannel::from_context(&ctx);
+
+    if !channel.is_admin(&roles) {
+        ctx.say("error: create skill requires admin role").await?;
+        return Ok(());
+    }
+
+    let user_id = ctx.author().id.to_string();
+    let username = ctx.author().name.clone();
+    let sender_id = format!("{}|{}", user_id, username);
+    let chat_id = ctx.channel_id().to_string();
+
+    let request = if let Some(n) = name {
+        if let Some(d) = description {
+            format!(
+                "use skill-creator to create a new skill named '{}' with description: {}",
+                n, d
+            )
+        } else {
+            format!("use skill-creator to create a new skill named: {}", n)
+        }
+    } else {
+        ctx.say("skill name required").await?;
+        return Ok(());
+    };
+
+    ctx.say("processing...").await?;
+    let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+    if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
+        error!("failed to publish skill_create: {}", e);
+        ctx.say(format!("error: {}", e)).await?;
+    }
+
+    Ok(())
+}
+
+/// Update an existing skill (admin only)
+#[poise::command(slash_command)]
+async fn skill_update(
+    ctx: poise::Context<'_, Data, DiscordError>,
+    #[description = "skill name"] name: Option<String>,
+) -> std::result::Result<(), DiscordError> {
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
+    let roles = DiscordChannel::get_user_roles(ctx.guild_id(), ctx.http(), ctx.author().id).await;
+    let channel = DiscordChannel::from_context(&ctx);
+
+    if !channel.is_admin(&roles) {
+        ctx.say("error: update skill requires admin role").await?;
+        return Ok(());
+    }
+
+    let user_id = ctx.author().id.to_string();
+    let username = ctx.author().name.clone();
+    let sender_id = format!("{}|{}", user_id, username);
+    let chat_id = ctx.channel_id().to_string();
+
+    if let Some(n) = name {
+        let request = format!("use skill-creator to update skill: {}", n);
+        ctx.say("processing...").await?;
+        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+        if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
+            error!("failed to publish skill_update: {}", e);
+            ctx.say(format!("error: {}", e)).await?;
+        }
+    } else {
+        ctx.say("skill name required").await?;
+    }
+
+    Ok(())
+}
+
+/// List all local skills
+#[poise::command(slash_command)]
+async fn skill_list_local(
+    ctx: poise::Context<'_, Data, DiscordError>,
+) -> std::result::Result<(), DiscordError> {
     let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
 
     let user_id = ctx.author().id.to_string();
@@ -922,64 +1019,208 @@ async fn skill(
     let sender_id = format!("{}|{}", user_id, username);
     let chat_id = ctx.channel_id().to_string();
 
-    let roles = DiscordChannel::get_user_roles(ctx.guild_id(), ctx.http(), ctx.author().id).await;
-    let channel = DiscordChannel::from_context(&ctx);
-
-    let request = match action {
-        SkillAction::Create => {
-            if !channel.is_admin(&roles) {
-                ctx.say("error: create skill operation requires admin role")
-                    .await?;
-                return Ok(());
-            }
-            if let Some(n) = name {
-                if let Some(d) = description {
-                    format!(
-                        "use skill-creator to create a new skill named '{}' with description: {}",
-                        n, d
-                    )
-                } else {
-                    format!("use skill-creator to create a new skill named: {}", n)
-                }
-            } else {
-                ctx.say("skill name required for create action").await?;
-                return Ok(());
-            }
-        }
-        SkillAction::Update => {
-            if !channel.is_admin(&roles) {
-                ctx.say("error: update skill operation requires admin role")
-                    .await?;
-                return Ok(());
-            }
-            if let Some(n) = name {
-                format!("use skill-creator to update skill: {}", n)
-            } else {
-                ctx.say("skill name required for update action").await?;
-                return Ok(());
-            }
-        }
-        SkillAction::List => "use skill-creator to list all available skills".to_string(),
-        SkillAction::View => {
-            if let Some(n) = name {
-                format!("use skill-creator to view details of skill: {}", n)
-            } else {
-                ctx.say("skill name required for view action").await?;
-                return Ok(());
-            }
-        }
-    };
-
-    ctx.say("processing skill request...").await?;
-
+    let request = "use skill-creator to list all available skills".to_string();
+    ctx.say("processing...").await?;
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
-        error!("failed to publish skill command to bus: {}", e);
-        ctx.say(format!("error: failed to process skill request: {}", e))
-            .await?;
+        error!("failed to publish skill_list_local: {}", e);
+        ctx.say(format!("error: {}", e)).await?;
     }
 
     Ok(())
+}
+
+/// View details of a skill
+#[poise::command(slash_command)]
+async fn skill_view(
+    ctx: poise::Context<'_, Data, DiscordError>,
+    #[description = "skill name"] name: Option<String>,
+) -> std::result::Result<(), DiscordError> {
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
+    let user_id = ctx.author().id.to_string();
+    let username = ctx.author().name.clone();
+    let sender_id = format!("{}|{}", user_id, username);
+    let chat_id = ctx.channel_id().to_string();
+
+    if let Some(n) = name {
+        let request = format!("use skill-creator to view details of skill: {}", n);
+        ctx.say("processing...").await?;
+        let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
+        if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
+            error!("failed to publish skill_view: {}", e);
+            ctx.say(format!("error: {}", e)).await?;
+        }
+    } else {
+        ctx.say("skill name required").await?;
+    }
+
+    Ok(())
+}
+
+/// Search the skill hub catalog
+#[poise::command(slash_command)]
+async fn skill_search(
+    ctx: poise::Context<'_, Data, DiscordError>,
+    #[description = "search keyword"] keyword: String,
+) -> std::result::Result<(), DiscordError> {
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
+    match ctx.data().hub_client.search(&keyword).await {
+        Ok(results) if results.is_empty() => {
+            ctx.say(format!("no skills found for `{}`", keyword))
+                .await?;
+        }
+        Ok(results) => {
+            let mut description = String::new();
+            for (i, skill) in results.iter().take(10).enumerate() {
+                description.push_str(&format!(
+                    "{}. **{}** - {}\n",
+                    i + 1,
+                    skill.name,
+                    skill.description.chars().take(100).collect::<String>()
+                ));
+            }
+            let embed = serenity::CreateEmbed::default()
+                .title(format!("Skill Hub Search: `{}`", keyword))
+                .description(description)
+                .color(0x00_99_ff);
+            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+        }
+        Err(e) => {
+            ctx.say(format!("error searching hub: {}", e)).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Install a skill from the hub
+#[poise::command(slash_command)]
+async fn skill_install(
+    ctx: poise::Context<'_, Data, DiscordError>,
+    #[description = "skill name (e.g., my-skill or my-skill@1.0.0)"] name: String,
+) -> std::result::Result<(), DiscordError> {
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
+    let roles = DiscordChannel::get_user_roles(ctx.guild_id(), ctx.http(), ctx.author().id).await;
+    let channel = DiscordChannel::from_context(&ctx);
+
+    if !channel.is_member(&roles) {
+        ctx.say("error: install skill requires member role").await?;
+        return Ok(());
+    }
+
+    let (skill_name, version) = parse_skill_name_version(&name);
+    ctx.say(format!("installing `{}`...", name)).await?;
+
+    match ctx
+        .data()
+        .hub_client
+        .install(skill_name, version.as_deref())
+        .await
+    {
+        Ok(record) => {
+            ctx.say(format!(
+                "✓ installed `{}` v{}",
+                record.name,
+                record.version.unwrap_or_else(|| "unknown".to_string())
+            ))
+            .await?;
+        }
+        Err(e) => {
+            ctx.say(format!("error: {}", e)).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// List installed hub skills
+#[poise::command(slash_command)]
+async fn skill_hub_list(
+    ctx: poise::Context<'_, Data, DiscordError>,
+) -> std::result::Result<(), DiscordError> {
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
+    match ctx.data().hub_client.list_installed() {
+        Ok(skills) if skills.is_empty() => {
+            ctx.say("no hub skills installed. use `/skill install <name>` to install one")
+                .await?;
+        }
+        Ok(skills) => {
+            let mut description = String::new();
+            for skill in &skills {
+                description.push_str(&format!(
+                    "• `{}` v{}\n",
+                    skill.name,
+                    skill.version.as_deref().unwrap_or("unknown")
+                ));
+            }
+            let embed = serenity::CreateEmbed::default()
+                .title("Installed Hub Skills")
+                .description(description)
+                .color(0x00_ff_99);
+            ctx.send(poise::CreateReply::default().embed(embed)).await?;
+        }
+        Err(e) => {
+            ctx.say(format!("error listing hub skills: {}", e)).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Remove an installed hub skill (member role required)
+#[poise::command(slash_command)]
+async fn skill_remove(
+    ctx: poise::Context<'_, Data, DiscordError>,
+    #[description = "skill name to remove"] name: String,
+) -> std::result::Result<(), DiscordError> {
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
+    let roles = DiscordChannel::get_user_roles(ctx.guild_id(), ctx.http(), ctx.author().id).await;
+    let channel = DiscordChannel::from_context(&ctx);
+
+    if !channel.is_member(&roles) {
+        ctx.say("error: remove skill requires member role").await?;
+        return Ok(());
+    }
+
+    match ctx.data().hub_client.remove(name.trim()) {
+        Ok(true) => {
+            ctx.say(format!("✓ removed hub skill `{}`", name.trim()))
+                .await?;
+        }
+        Ok(false) => {
+            ctx.say(format!(
+                "hub skill `{}` was not found. use `/skill hub-list` to see installed skills",
+                name.trim()
+            ))
+            .await?;
+        }
+        Err(e) => {
+            ctx.say(format!("error removing skill: {}", e)).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse skill name and version from "name@version" format
+fn parse_skill_name_version(input: &str) -> (&str, Option<String>) {
+    let trimmed = input.trim();
+    if let Some(at_index) = trimmed.find('@') {
+        let name = trimmed[..at_index].trim();
+        let version = trimmed[at_index + 1..].trim();
+        if version.is_empty() {
+            (name, None)
+        } else {
+            (name, Some(version.to_string()))
+        }
+    } else {
+        (trimmed, None)
+    }
 }
 
 /// workspace file enum
@@ -1733,7 +1974,7 @@ async fn help(
                 "**Tmux**\n`/tmux create <session>` - create session\n`/tmux list` - list sessions\n`/tmux attach <session>` - attach to session\n`/tmux send <session> <command>` - send command\n`/tmux capture <session>` - capture output"
             }
             "skill" => {
-                "**Skill Management**\n`/skill create <name> [description]` - create skill (admin only)\n`/skill update <name>` - update skill (admin only)\n`/skill list` - list all skills\n`/skill view <name>` - view skill details"
+                "**Skill Management**\n**Local Skills:**\n`/skill create <name> [desc]` - create skill (admin)\n`/skill update <name>` - update skill (admin)\n`/skill list-local` - list local skills\n`/skill view <name>` - view skill details\n\n**Hub Skills:**\n`/skill search <keyword>` - search hub catalog\n`/skill install <name>[@version]` - install from hub (member)\n`/skill hub-list` - list installed hub skills"
             }
             "workspace" => {
                 "**Workspace Management**\n`/workspace view <file>` - view workspace file (soul|user|agents|tools|heartbeat)\n`/workspace heartbeat list` - list heartbeat tasks\n`/workspace memory view` - view memory"
@@ -1799,6 +2040,7 @@ impl Channel for DiscordChannel {
 
         let bus_clone = bus.clone();
         let config_clone = config.clone();
+        let skills_config_clone = self.skills_config.clone();
         let http_ref_setup = http_ref.clone();
         let bus_message = bus.clone();
         let config_message = config.clone();
@@ -1811,6 +2053,7 @@ impl Channel for DiscordChannel {
         struct MessageHandler {
             bus: MessageBus,
             config: DiscordConfig,
+            skills_config: SkillsConfig,
         }
 
         #[serenity::async_trait]
@@ -1856,16 +2099,20 @@ impl Channel for DiscordChannel {
                     Vec::new()
                 };
 
-                let channel = DiscordChannel::new(self.config.clone(), self.bus.clone()).unwrap_or(
-                    DiscordChannel {
-                        config: self.config.clone(),
-                        bus: self.bus.clone(),
-                        running: Arc::new(RwLock::new(true)),
-                        http: Arc::new(RwLock::new(None)),
-                        permissions: PermissionManager::from_discord_config(&self.config),
-                        rbac_manager: None,
-                    },
-                );
+                let channel = DiscordChannel::new(
+                    self.config.clone(),
+                    self.skills_config.clone(),
+                    self.bus.clone(),
+                )
+                .unwrap_or(DiscordChannel {
+                    config: self.config.clone(),
+                    skills_config: self.skills_config.clone(),
+                    bus: self.bus.clone(),
+                    running: Arc::new(RwLock::new(true)),
+                    http: Arc::new(RwLock::new(None)),
+                    permissions: PermissionManager::from_discord_config(&self.config),
+                    rbac_manager: None,
+                });
 
                 if !channel.is_allowed(&user_id, &roles) {
                     debug!("message from unauthorized user: {}", user_id);
@@ -2055,6 +2302,7 @@ impl Channel for DiscordChannel {
                 let http_ref = http_ref_setup.clone();
                 let bus = bus_clone.clone();
                 let config = config_clone.clone();
+                let skills_config = skills_config_clone.clone();
                 Box::pin(async move {
                     info!("discord bot connected as {}", _ready.user.name);
                     *http_ref.write().await = Some(ctx.http.clone());
@@ -2090,7 +2338,25 @@ impl Channel for DiscordChannel {
                         }
                     }
 
-                    Ok(Data { bus, config })
+                    // Create skills hub client
+                    let hub_config =
+                        crate::skills::SkillHubClientConfig::from_skills_config(&skills_config);
+                    let hub_client = crate::skills::SkillHubClient::new(hub_config)
+                        .map(std::sync::Arc::new)
+                        .map_err(|e| {
+                            error!("failed to initialize skills hub client: {}", e);
+                            serenity::Error::from(std::io::Error::other(format!(
+                                "failed to initialize skills hub client: {}",
+                                e
+                            )))
+                        })?;
+
+                    Ok(Data {
+                        bus,
+                        config,
+                        skills_config,
+                        hub_client,
+                    })
                 })
             })
             .build();
@@ -2098,6 +2364,7 @@ impl Channel for DiscordChannel {
         let message_handler = MessageHandler {
             bus: bus_message.clone(),
             config: config_message.clone(),
+            skills_config: self.skills_config.clone(),
         };
 
         let mut client = serenity::ClientBuilder::new(&config.token, intents)

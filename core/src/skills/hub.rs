@@ -6,7 +6,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_SKILLS_HUB_CATALOG_URL: &str = "https://clawhub.run/api/skills/catalog";
@@ -55,7 +55,10 @@ impl HubSkillCatalogEntry {
     fn matches(&self, query: &str) -> bool {
         self.name.to_lowercase().contains(query)
             || self.description.to_lowercase().contains(query)
-            || self.tags.iter().any(|tag| tag.to_lowercase().contains(query))
+            || self
+                .tags
+                .iter()
+                .any(|tag| tag.to_lowercase().contains(query))
     }
 
     fn download_url_for(&self, version: Option<&str>) -> Option<String> {
@@ -151,7 +154,6 @@ pub struct SkillHubClientConfig {
     pub auth_token: Option<String>,
     pub managed_root: PathBuf,
     pub cache_root: PathBuf,
-    pub auto_install_on_miss: bool,
 }
 
 impl SkillHubClientConfig {
@@ -169,8 +171,17 @@ impl SkillHubClientConfig {
             auth_token: Self::env_auth_token(),
             managed_root,
             cache_root,
-            auto_install_on_miss: false,
         }
+    }
+
+    /// Create a config from the root MofaClaw configuration.
+    pub fn from_config(config: &crate::Config) -> Self {
+        Self::from_skills_config(&config.skills)
+    }
+
+    /// Create a config from the MofaClaw skills configuration.
+    pub fn from_skills_config(skills: &crate::config::SkillsConfig) -> Self {
+        Self::for_mofaclaw().with_catalog_url(skills.hub_url.clone())
     }
 
     /// Create a new config with a custom catalog URL
@@ -197,12 +208,6 @@ impl SkillHubClientConfig {
         self
     }
 
-    /// Set auto-install on missing skills
-    pub fn with_auto_install(mut self, enabled: bool) -> Self {
-        self.auto_install_on_miss = enabled;
-        self
-    }
-
     fn env_auth_token() -> Option<String> {
         std::env::var("MOFACLAW_HUB_TOKEN")
             .ok()
@@ -222,13 +227,22 @@ impl SkillHubClient {
     /// Create a new hub client
     pub fn new(config: SkillHubClientConfig) -> Result<Self> {
         fs::create_dir_all(&config.managed_root).with_context(|| {
-            format!("failed to create managed root {}", config.managed_root.display())
+            format!(
+                "failed to create managed root {}",
+                config.managed_root.display()
+            )
         })?;
         fs::create_dir_all(&config.cache_root).with_context(|| {
-            format!("failed to create cache root {}", config.cache_root.display())
+            format!(
+                "failed to create cache root {}",
+                config.cache_root.display()
+            )
         })?;
         fs::create_dir_all(registry_dir(&config)).with_context(|| {
-            format!("failed to create registry dir {}", registry_dir(&config).display())
+            format!(
+                "failed to create registry dir {}",
+                registry_dir(&config).display()
+            )
         })?;
 
         let mut headers = HeaderMap::new();
@@ -309,14 +323,15 @@ impl SkillHubClient {
         let response = response
             .error_for_status()
             .with_context(|| format!("hub download failed: {}", download_url))?;
-        let bundle: HubSkillBundle = response
-            .json()
-            .await
-            .context("failed to decode bundle")?;
+        let bundle: HubSkillBundle = response.json().await.context("failed to decode bundle")?;
 
         // Install files
-        let installed =
-            install_skill_bundle(&self.config.managed_root, &entry.name, &bundle, Some(&download_url))?;
+        let installed = install_skill_bundle(
+            &self.config.managed_root,
+            &entry.name,
+            &bundle,
+            Some(&download_url),
+        )?;
 
         let now = now_epoch_secs();
         let record = ManagedHubSkillRecord {
@@ -356,8 +371,8 @@ impl SkillHubClient {
                 continue;
             }
 
-            let bytes = fs::read(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
+            let bytes =
+                fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
             let record: ManagedHubSkillRecord =
                 serde_json::from_slice(&bytes).context("failed to decode record")?;
             records.push(record);
@@ -375,8 +390,8 @@ impl SkillHubClient {
             return Ok(None);
         }
 
-        let bytes = fs::read(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
+        let bytes =
+            fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
         let record: ManagedHubSkillRecord =
             serde_json::from_slice(&bytes).context("failed to decode")?;
         Ok(Some(record))
@@ -387,9 +402,8 @@ impl SkillHubClient {
         let mut removed = false;
         let skill_dir = self.config.managed_root.join(name);
         if skill_dir.exists() {
-            fs::remove_dir_all(&skill_dir).with_context(|| {
-                format!("failed to remove {}", skill_dir.display())
-            })?;
+            fs::remove_dir_all(&skill_dir)
+                .with_context(|| format!("failed to remove {}", skill_dir.display()))?;
             removed = true;
         }
 
@@ -467,19 +481,56 @@ fn install_skill_bundle(
     source_url: Option<&str>,
 ) -> Result<InstalledHubSkill> {
     validate_skill_name(name)?;
-    let install_dir = root.join(name);
-    fs::create_dir_all(&install_dir)
-        .with_context(|| format!("failed to create dir {}", install_dir.display()))?;
+    fs::create_dir_all(root).with_context(|| format!("failed to create dir {}", root.display()))?;
 
-    for file in &bundle.files {
-        let file_path = install_dir.join(&file.path);
-        if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create dir {}", parent.display())
-            })?;
+    let install_dir = root.join(name);
+    let staging_dir = unique_install_state_dir(root, name, "tmp");
+    fs::create_dir_all(&staging_dir)
+        .with_context(|| format!("failed to create dir {}", staging_dir.display()))?;
+
+    let write_result: Result<()> = (|| {
+        for file in &bundle.files {
+            let file_path = validate_bundle_file_path(&staging_dir, &file.path)?;
+            if let Some(parent) = file_path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create dir {}", parent.display()))?;
+            }
+            fs::write(&file_path, &file.content)
+                .with_context(|| format!("failed to write {}", file_path.display()))?;
         }
-        fs::write(&file_path, &file.content)
-            .with_context(|| format!("failed to write {}", file_path.display()))?;
+        Ok(())
+    })();
+
+    if let Err(err) = write_result {
+        cleanup_install_state(&staging_dir);
+        return Err(err);
+    }
+
+    let mut backup_dir = None;
+    if install_dir.exists() {
+        let candidate = unique_install_state_dir(root, name, "bak");
+        fs::rename(&install_dir, &candidate).with_context(|| {
+            format!(
+                "failed to move existing install {} to {}",
+                install_dir.display(),
+                candidate.display()
+            )
+        })?;
+        backup_dir = Some(candidate);
+    }
+
+    if let Err(err) = fs::rename(&staging_dir, &install_dir)
+        .with_context(|| format!("failed to activate install {}", install_dir.display()))
+    {
+        cleanup_install_state(&staging_dir);
+        if let Some(backup_dir) = &backup_dir {
+            let _ = fs::rename(backup_dir, &install_dir);
+        }
+        return Err(err);
+    }
+
+    if let Some(backup_dir) = backup_dir {
+        cleanup_install_state(&backup_dir);
     }
 
     Ok(InstalledHubSkill {
@@ -497,6 +548,37 @@ fn validate_skill_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_bundle_file_path(install_dir: &Path, relative_path: &str) -> Result<PathBuf> {
+    let path = Path::new(relative_path);
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                bail!("invalid bundle path: {}", relative_path);
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        bail!("invalid bundle path: {}", relative_path);
+    }
+
+    Ok(install_dir.join(normalized))
+}
+
+fn unique_install_state_dir(root: &Path, name: &str, suffix: &str) -> PathBuf {
+    root.join(format!(".{}.{}.{}", name, suffix, now_epoch_nanos()))
+}
+
+fn cleanup_install_state(path: &Path) {
+    if path.exists() {
+        let _ = fs::remove_dir_all(path);
+    }
+}
+
 fn registry_dir(config: &SkillHubClientConfig) -> PathBuf {
     config.cache_root.join(REGISTRY_DIR)
 }
@@ -510,4 +592,66 @@ fn now_epoch_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn now_epoch_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn install_skill_bundle_rejects_parent_traversal_paths() {
+        let root = TempDir::new().unwrap();
+        let bundle = HubSkillBundle {
+            version: Some("1.0.0".to_string()),
+            files: vec![HubSkillBundleFile {
+                path: "../escape.txt".to_string(),
+                content: "escape".to_string(),
+            }],
+        };
+
+        let err = install_skill_bundle(root.path(), "demo-skill", &bundle, None).unwrap_err();
+
+        assert!(
+            err.to_string().contains("invalid bundle path"),
+            "unexpected error: {err}"
+        );
+        assert!(!root.path().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn install_skill_bundle_cleans_up_partial_install_on_failure() {
+        let root = TempDir::new().unwrap();
+        let bundle = HubSkillBundle {
+            version: Some("1.0.0".to_string()),
+            files: vec![
+                HubSkillBundleFile {
+                    path: "SKILL.md".to_string(),
+                    content: "---\nname: demo-skill\ndescription: partial install\n---\n".to_string(),
+                },
+                HubSkillBundleFile {
+                    path: "../escape.txt".to_string(),
+                    content: "escape".to_string(),
+                },
+            ],
+        };
+
+        let err = install_skill_bundle(root.path(), "demo-skill", &bundle, None).unwrap_err();
+
+        assert!(
+            err.to_string().contains("invalid bundle path"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !root.path().join("demo-skill").exists(),
+            "partial install directory should be removed on failure"
+        );
+    }
 }

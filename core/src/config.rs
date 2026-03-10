@@ -357,13 +357,11 @@ pub struct TranscriptionConfig {
 
 /// Skills Hub configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct SkillsConfig {
     /// Hub catalog URL
     #[serde(default = "default_hub_catalog_url")]
     pub hub_url: String,
-    /// Auto-install skills on first invocation
-    #[serde(default)]
-    pub auto_install: bool,
 }
 
 fn default_hub_catalog_url() -> String {

@@ -11,7 +11,6 @@ use mofa_sdk::skills::SkillsManager;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tracing::debug;
 
 /// Builds the context (system prompt + messages) for the agent
@@ -23,8 +22,8 @@ use tracing::debug;
 /// Memory (long-term and daily notes) is handled by mofa's PromptContext.
 #[derive(Clone)]
 pub struct ContextBuilder {
-    /// Skills manager (from mofa-sdk)
-    skills: Arc<SkillsManager>,
+    /// Skill search paths, in priority order
+    search_dirs: Vec<PathBuf>,
     /// Workspace path (cached)
     workspace: PathBuf,
 }
@@ -38,7 +37,6 @@ impl ContextBuilder {
     pub fn new(config: &Config) -> Self {
         let workspace = config.workspace_path();
 
-        // Create SkillsManager with workspace + builtin skills
         let workspace_skills = workspace.join("skills");
         let mut builtin_skills = SkillsManager::find_builtin_skills();
 
@@ -95,45 +93,36 @@ impl ContextBuilder {
             }
         }
 
-        // Add hub skills directory (where skills installed from hub are stored)
         let mut search_dirs = vec![workspace_skills.clone()];
-        if let Some(home) = dirs::home_dir() {
-            let hub_skills_dir = home.join(".mofaclaw").join("skills").join("hub");
-            if hub_skills_dir.exists() {
-                search_dirs.push(hub_skills_dir);
-            }
-        }
+        search_dirs.push(crate::config::get_data_dir().join("skills").join("hub"));
 
-        let skills = if let Some(builtin) = builtin_skills {
-            tracing::info!("Using workspace, hub, and builtin skills");
+        if let Some(builtin) = builtin_skills {
             search_dirs.push(builtin);
-            let manager = SkillsManager::with_search_dirs(search_dirs)
-                .unwrap_or_else(|_| SkillsManager::new(&workspace_skills).unwrap());
-            // Log the number of skills found
-            let all_metadata = manager.get_all_metadata();
-            tracing::info!("Found {} skills", all_metadata.len());
-            for meta in &all_metadata {
-                tracing::info!("  - {} (requires: {:?})", meta.name, meta.requires);
-            }
-            manager
-        } else {
-            tracing::info!("No builtin skills found, using workspace and hub skills");
-            let manager = SkillsManager::with_search_dirs(search_dirs)
-                .unwrap_or_else(|_| SkillsManager::new(&workspace_skills).unwrap());
-            let all_metadata = manager.get_all_metadata();
-            tracing::info!("Found {} skills", all_metadata.len());
-            manager
-        };
+        }
 
         Self {
-            skills: Arc::new(skills),
+            search_dirs,
             workspace,
         }
+    }
+
+    fn build_skills_manager(&self) -> SkillsManager {
+        let workspace_skills = self.workspace.join("skills");
+        let manager = SkillsManager::with_search_dirs(self.search_dirs.clone())
+            .unwrap_or_else(|_| SkillsManager::new(&workspace_skills).unwrap());
+        let all_metadata = manager.get_all_metadata();
+        debug!(
+            "Loaded {} skills from {:?}",
+            all_metadata.len(),
+            self.search_dirs
+        );
+        manager
     }
 
     /// Build the system prompt from bootstrap files, memory, and skills
     pub async fn build_system_prompt(&self, skill_names: Option<&[String]>) -> Result<String> {
         let mut parts = Vec::new();
+        let skills = self.build_skills_manager();
 
         // Build base prompt using mofa's PromptContextBuilder
         // Memory context (long-term + today's notes) is integrated automatically
@@ -163,9 +152,9 @@ impl ContextBuilder {
         parts.push(base_prompt);
 
         // Add skills - progressive loading
-        let always_skills = self.skills.get_always_skills_async().await;
+        let always_skills = skills.get_always_skills_async().await;
         if !always_skills.is_empty() {
-            let always_content = self.skills.load_skills_for_context(&always_skills).await;
+            let always_content = skills.load_skills_for_context(&always_skills).await;
             if !always_content.is_empty() {
                 parts.push(format!("# Active Skills\n\n{}", always_content));
             }
@@ -174,7 +163,7 @@ impl ContextBuilder {
         // Requested skills
         if let Some(names) = skill_names {
             if !names.is_empty() {
-                let skills_content = self.skills.load_skills_for_context(names).await;
+                let skills_content = skills.load_skills_for_context(names).await;
                 if !skills_content.is_empty() {
                     parts.push(format!("# Requested Skills\n\n{}", skills_content));
                 }
@@ -182,7 +171,7 @@ impl ContextBuilder {
         }
 
         // Skills summary
-        let skills_summary = self.skills.build_skills_summary().await;
+        let skills_summary = skills.build_skills_summary().await;
         if !skills_summary.is_empty() {
             parts.push(format!(
                 r#"# Available Skills
@@ -339,9 +328,21 @@ Read the skill's SKILL.md file using the `read_file` tool to learn how to use it
     pub fn workspace(&self) -> &Path {
         &self.workspace
     }
+}
 
-    /// Get the skills manager
-    pub fn skills(&self) -> &Arc<SkillsManager> {
-        &self.skills
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_builder_includes_shared_hub_search_dir() {
+        let builder = ContextBuilder::new(&Config::default());
+        let expected = crate::config::get_data_dir().join("skills").join("hub");
+
+        assert!(
+            builder.search_dirs.contains(&expected),
+            "expected shared hub path {expected:?} in search dirs {:?}",
+            builder.search_dirs
+        );
     }
 }

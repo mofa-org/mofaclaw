@@ -350,17 +350,18 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     let channel_manager = ChannelManager::new(&config, bus.clone());
 
     // Initialize RBAC manager if configured (must be before channel registrations)
-    let rbac_manager: Option<Arc<RbacManager>> = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
-        if rbac_config.enabled {
-            let workspace = config.workspace_path();
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+    let rbac_manager: Option<Arc<RbacManager>> =
+        if let Ok(Some(rbac_config)) = config.get_rbac_config() {
+            if rbac_config.enabled {
+                let workspace = config.workspace_path();
+                let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
+        };
 
     // register dingtalk channel if enabled
     if config.channels.dingtalk.enabled {
@@ -413,11 +414,16 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
         match if let Some(ref rbac) = rbac_manager {
             DiscordChannel::with_rbac(
                 config.channels.discord.clone(),
+                config.skills.clone(),
                 bus.clone(),
                 Some(rbac.clone()),
             )
         } else {
-            DiscordChannel::new(config.channels.discord.clone(), bus.clone())
+            DiscordChannel::new(
+                config.channels.discord.clone(),
+                config.skills.clone(),
+                bus.clone(),
+            )
         } {
             Ok(discord) => {
                 channel_manager.register_channel(Arc::new(discord)).await;

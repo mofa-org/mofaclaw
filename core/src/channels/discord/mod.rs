@@ -4,7 +4,7 @@ pub mod components;
 
 use super::base::Channel;
 use crate::bus::MessageBus;
-use crate::config::DiscordConfig;
+use crate::config::{DiscordConfig, SkillsConfig};
 use crate::error::{ChannelError, Result};
 use crate::get_workspace_path;
 use crate::messages::InboundMessage;
@@ -22,6 +22,8 @@ pub struct Data {
     pub bus: MessageBus,
     /// discord configuration
     pub config: DiscordConfig,
+    /// root skills configuration
+    pub skills_config: SkillsConfig,
     /// skills hub client
     pub hub_client: std::sync::Arc<crate::skills::SkillHubClient>,
 }
@@ -29,6 +31,7 @@ pub struct Data {
 /// discord channel using serenity and poise
 pub struct DiscordChannel {
     config: DiscordConfig,
+    skills_config: SkillsConfig,
     bus: MessageBus,
     running: Arc<RwLock<bool>>,
     http: Arc<RwLock<Option<Arc<serenity::Http>>>>,
@@ -86,13 +89,18 @@ pub enum PrReviewAction {
 
 impl DiscordChannel {
     /// create new discord channel
-    pub fn new(config: DiscordConfig, bus: MessageBus) -> Result<Self> {
-        Self::with_rbac(config, bus, None)
+    pub fn new(
+        config: DiscordConfig,
+        skills_config: SkillsConfig,
+        bus: MessageBus,
+    ) -> Result<Self> {
+        Self::with_rbac(config, skills_config, bus, None)
     }
 
     /// create new discord channel with RBAC manager
     pub fn with_rbac(
         config: DiscordConfig,
+        skills_config: SkillsConfig,
         bus: MessageBus,
         rbac_manager: Option<Arc<RbacManager>>,
     ) -> Result<Self> {
@@ -104,6 +112,7 @@ impl DiscordChannel {
 
         Ok(Self {
             config,
+            skills_config,
             bus,
             running: Arc::new(RwLock::new(false)),
             http: Arc::new(RwLock::new(None)),
@@ -162,6 +171,7 @@ impl DiscordChannel {
 
         Self {
             config,
+            skills_config: ctx.data().skills_config.clone(),
             bus: ctx.data().bus.clone(),
             running: Arc::new(RwLock::new(true)),
             http: Arc::new(RwLock::new(None)),
@@ -896,8 +906,21 @@ async fn tmux(
 }
 
 /// skill command group (parent - no direct invocation)
-#[poise::command(slash_command, subcommands("skill_create", "skill_update", "skill_list_local", "skill_view", "skill_search", "skill_install", "skill_hub_list"))]
-async fn skill(_ctx: poise::Context<'_, Data, DiscordError>) -> std::result::Result<(), DiscordError> {
+#[poise::command(
+    slash_command,
+    subcommands(
+        "skill_create",
+        "skill_update",
+        "skill_list_local",
+        "skill_view",
+        "skill_search",
+        "skill_install",
+        "skill_hub_list"
+    )
+)]
+async fn skill(
+    _ctx: poise::Context<'_, Data, DiscordError>,
+) -> std::result::Result<(), DiscordError> {
     Ok(())
 }
 
@@ -925,7 +948,10 @@ async fn skill_create(
 
     let request = if let Some(n) = name {
         if let Some(d) = description {
-            format!("use skill-creator to create a new skill named '{}' with description: {}", n, d)
+            format!(
+                "use skill-creator to create a new skill named '{}' with description: {}",
+                n, d
+            )
         } else {
             format!("use skill-creator to create a new skill named: {}", n)
         }
@@ -1041,7 +1067,8 @@ async fn skill_search(
 
     match ctx.data().hub_client.search(&keyword).await {
         Ok(results) if results.is_empty() => {
-            ctx.say(format!("no skills found for `{}`", keyword)).await?;
+            ctx.say(format!("no skills found for `{}`", keyword))
+                .await?;
         }
         Ok(results) => {
             let mut description = String::new();
@@ -1086,9 +1113,19 @@ async fn skill_install(
     let (skill_name, version) = parse_skill_name_version(&name);
     ctx.say(format!("installing `{}`...", name)).await?;
 
-    match ctx.data().hub_client.install(skill_name, version.as_deref()).await {
+    match ctx
+        .data()
+        .hub_client
+        .install(skill_name, version.as_deref())
+        .await
+    {
         Ok(record) => {
-            ctx.say(format!("✓ installed `{}` v{}", record.name, record.version.unwrap_or_else(|| "unknown".to_string()))).await?;
+            ctx.say(format!(
+                "✓ installed `{}` v{}",
+                record.name,
+                record.version.unwrap_or_else(|| "unknown".to_string())
+            ))
+            .await?;
         }
         Err(e) => {
             ctx.say(format!("error: {}", e)).await?;
@@ -1107,7 +1144,8 @@ async fn skill_hub_list(
 
     match ctx.data().hub_client.list_installed() {
         Ok(skills) if skills.is_empty() => {
-            ctx.say("no hub skills installed. use `/skill install <name>` to install one").await?;
+            ctx.say("no hub skills installed. use `/skill install <name>` to install one")
+                .await?;
         }
         Ok(skills) => {
             let mut description = String::new();
@@ -1115,7 +1153,7 @@ async fn skill_hub_list(
                 description.push_str(&format!(
                     "• `{}` v{}\n",
                     skill.name,
-                    skill.version.as_ref().unwrap_or(&"unknown".to_string())
+                    skill.version.as_deref().unwrap_or("unknown")
                 ));
             }
             let embed = serenity::CreateEmbed::default()
@@ -1134,12 +1172,17 @@ async fn skill_hub_list(
 
 /// Parse skill name and version from "name@version" format
 fn parse_skill_name_version(input: &str) -> (&str, Option<String>) {
-    if let Some(at_index) = input.find('@') {
-        let name = &input[..at_index];
-        let version = input[at_index + 1..].to_string();
-        (name, Some(version))
+    let trimmed = input.trim();
+    if let Some(at_index) = trimmed.find('@') {
+        let name = trimmed[..at_index].trim();
+        let version = trimmed[at_index + 1..].trim();
+        if version.is_empty() {
+            (name, None)
+        } else {
+            (name, Some(version.to_string()))
+        }
     } else {
-        (input, None)
+        (trimmed, None)
     }
 }
 
@@ -1960,6 +2003,7 @@ impl Channel for DiscordChannel {
 
         let bus_clone = bus.clone();
         let config_clone = config.clone();
+        let skills_config_clone = self.skills_config.clone();
         let http_ref_setup = http_ref.clone();
         let bus_message = bus.clone();
         let config_message = config.clone();
@@ -1972,6 +2016,7 @@ impl Channel for DiscordChannel {
         struct MessageHandler {
             bus: MessageBus,
             config: DiscordConfig,
+            skills_config: SkillsConfig,
         }
 
         #[serenity::async_trait]
@@ -2017,16 +2062,20 @@ impl Channel for DiscordChannel {
                     Vec::new()
                 };
 
-                let channel = DiscordChannel::new(self.config.clone(), self.bus.clone()).unwrap_or(
-                    DiscordChannel {
-                        config: self.config.clone(),
-                        bus: self.bus.clone(),
-                        running: Arc::new(RwLock::new(true)),
-                        http: Arc::new(RwLock::new(None)),
-                        permissions: PermissionManager::from_discord_config(&self.config),
-                        rbac_manager: None,
-                    },
-                );
+                let channel = DiscordChannel::new(
+                    self.config.clone(),
+                    self.skills_config.clone(),
+                    self.bus.clone(),
+                )
+                .unwrap_or(DiscordChannel {
+                    config: self.config.clone(),
+                    skills_config: self.skills_config.clone(),
+                    bus: self.bus.clone(),
+                    running: Arc::new(RwLock::new(true)),
+                    http: Arc::new(RwLock::new(None)),
+                    permissions: PermissionManager::from_discord_config(&self.config),
+                    rbac_manager: None,
+                });
 
                 if !channel.is_allowed(&user_id, &roles) {
                     debug!("message from unauthorized user: {}", user_id);
@@ -2216,6 +2265,7 @@ impl Channel for DiscordChannel {
                 let http_ref = http_ref_setup.clone();
                 let bus = bus_clone.clone();
                 let config = config_clone.clone();
+                let skills_config = skills_config_clone.clone();
                 Box::pin(async move {
                     info!("discord bot connected as {}", _ready.user.name);
                     *http_ref.write().await = Some(ctx.http.clone());
@@ -2252,16 +2302,24 @@ impl Channel for DiscordChannel {
                     }
 
                     // Create skills hub client
-                    let hub_config = crate::skills::SkillHubClientConfig::for_mofaclaw();
-                    let hub_client = match crate::skills::SkillHubClient::new(hub_config) {
-                        Ok(client) => std::sync::Arc::new(client),
-                        Err(e) => {
+                    let hub_config =
+                        crate::skills::SkillHubClientConfig::from_skills_config(&skills_config);
+                    let hub_client = crate::skills::SkillHubClient::new(hub_config)
+                        .map(std::sync::Arc::new)
+                        .map_err(|e| {
                             error!("failed to initialize skills hub client: {}", e);
-                            std::sync::Arc::new(crate::skills::SkillHubClient::new(crate::skills::SkillHubClientConfig::for_mofaclaw()).unwrap())
-                        }
-                    };
+                            serenity::Error::from(std::io::Error::other(format!(
+                                "failed to initialize skills hub client: {}",
+                                e
+                            )))
+                        })?;
 
-                    Ok(Data { bus, config, hub_client })
+                    Ok(Data {
+                        bus,
+                        config,
+                        skills_config,
+                        hub_client,
+                    })
                 })
             })
             .build();
@@ -2269,6 +2327,7 @@ impl Channel for DiscordChannel {
         let message_handler = MessageHandler {
             bus: bus_message.clone(),
             config: config_message.clone(),
+            skills_config: self.skills_config.clone(),
         };
 
         let mut client = serenity::ClientBuilder::new(&config.token, intents)

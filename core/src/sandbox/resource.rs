@@ -144,6 +144,13 @@ impl UserUsage {
 }
 
 impl ResourceLimiter {
+    pub fn new(limits: ResourceLimits) -> Self {
+        Self {
+            limits,
+            usage: ResourceUsageTracker::new(),
+        }
+    }
+
     pub fn check_rate_limit(
         &self,
         user: &UserId,

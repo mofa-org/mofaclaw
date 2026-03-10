@@ -112,7 +112,7 @@ impl AgentLoop {
         let rbac_manager = config.get_rbac_config().ok().flatten().map(|rc| {
             Arc::new(crate::rbac::manager::RbacManager::new(
                 rc,
-                workspace_path.clone(),
+                config.workspace_path(),
                 dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")),
             ))
         });

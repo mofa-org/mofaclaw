@@ -159,11 +159,36 @@ impl mofa_sdk::llm::ToolExecutor for ToolRegistry {
 /// Wrapper for Arc<RwLock<ToolRegistry>> that implements unified ToolExecutor
 pub struct ToolRegistryExecutor {
     inner: Arc<RwLock<ToolRegistry>>,
+    user_id: String,
+    resource_limiter: Option<Arc<crate::sandbox::resource::ResourceLimiter>>,
+    role: Option<crate::rbac::Role>,
 }
 
 impl ToolRegistryExecutor {
-    pub fn new(inner: Arc<RwLock<ToolRegistry>>) -> Self {
-        Self { inner }
+    pub fn new(
+        inner: Arc<RwLock<ToolRegistry>>,
+        user_id: String,
+        resource_limiter: Option<Arc<crate::sandbox::resource::ResourceLimiter>>,
+        role: Option<crate::rbac::Role>,
+    ) -> Self {
+        Self {
+            inner,
+            user_id,
+            resource_limiter,
+            role,
+        }
+    }
+}
+
+fn map_tool_to_operation(name: &str) -> Option<crate::sandbox::resource::Operation> {
+    match name {
+        "exec" => Some(crate::sandbox::resource::Operation::Command),
+        "read_file" | "write_file" | "edit_file" | "list_dir" => {
+            Some(crate::sandbox::resource::Operation::FileOp)
+        }
+        "web_search" | "web_fetch" => Some(crate::sandbox::resource::Operation::WebRequest),
+        "spawn" => Some(crate::sandbox::resource::Operation::SpawnSubagent),
+        _ => None,
     }
 }
 
@@ -182,10 +207,35 @@ impl mofa_sdk::llm::ToolExecutor for ToolRegistryExecutor {
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
 
-        registry
+        let operation = map_tool_to_operation(name);
+        let user = crate::sandbox::resource::UserId(self.user_id.clone());
+
+        let _slot = if let (Some(limiter), Some(op)) = (&self.resource_limiter, operation.clone()) {
+            limiter
+                .check_rate_limit(&user, self.role.as_ref(), &op)
+                .map_err(|e| mofa_sdk::llm::LLMError::Other(e.to_string()))?;
+            limiter.increment_usage(&user, &op);
+            Some(
+                limiter
+                    .acquire_slot(&user, self.role.as_ref(), op.clone())
+                    .await
+                    .map_err(|e| mofa_sdk::llm::LLMError::Other(e.to_string()))?,
+            )
+        } else {
+            None
+        };
+
+        let result = registry
             .execute(name, &params)
             .await
-            .map_err(|e| mofa_sdk::llm::LLMError::Other(format!("Tool execution failed: {}", e)))
+            .map_err(|e| mofa_sdk::llm::LLMError::Other(format!("Tool execution failed: {}", e)))?;
+
+        if let (Some(limiter), Some(op)) = (&self.resource_limiter, operation) {
+            let truncated = limiter.truncate_output(result.as_bytes(), &op);
+            Ok(String::from_utf8_lossy(&truncated).into_owned())
+        } else {
+            Ok(result)
+        }
     }
 
     async fn available_tools(&self) -> mofa_sdk::llm::LLMResult<Vec<MofaTool>> {

@@ -5,7 +5,9 @@
 
 use crate::error::{ConfigError, Result};
 use crate::rbac::config::RbacConfig;
+use crate::sandbox::config::{RoleLimitConfig, SandboxConfig};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -376,6 +378,12 @@ pub struct Config {
     /// RBAC configuration
     #[serde(default)]
     pub rbac: Option<RbacConfig>,
+    /// Sandbox configuration
+    #[serde(default)]
+    pub sandbox: Option<SandboxConfig>,
+    /// Per-role resource limits
+    #[serde(default)]
+    pub role_limits: Option<HashMap<String, RoleLimitConfig>>,
 }
 
 impl Config {

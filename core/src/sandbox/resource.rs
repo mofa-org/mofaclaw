@@ -38,7 +38,6 @@ pub struct ResourceLimiter {
 #[derive(Clone, Debug)]
 pub struct ResourceUsageTracker {
     pub user_usage: Arc<Mutex<HashMap<UserId, UserUsage>>>,
-    pub global_usage: Arc<Mutex<GlobalUsage>>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,11 +50,7 @@ pub struct UserUsage {
     pub last_reset: Instant,
 }
 
-#[derive(Clone, Debug)]
-pub struct GlobalUsage {
-    pub active_commands: u32,
-    pub active_subagents: u32,
-}
+
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct UserId(pub String);
@@ -121,10 +116,6 @@ impl ResourceUsageTracker {
     pub fn new() -> Self {
         Self {
             user_usage: Arc::new(Mutex::new(HashMap::new())),
-            global_usage: Arc::new(Mutex::new(GlobalUsage {
-                active_commands: 0,
-                active_subagents: 0,
-            })),
         }
     }
 }
@@ -139,7 +130,7 @@ impl UserUsage {
         }
     }
     pub fn seconds_until_reset(&self) -> u64 {
-        60 - self.last_reset.elapsed().as_secs()
+        60u64.saturating_sub(self.last_reset.elapsed().as_secs())
     }
 }
 
@@ -157,10 +148,11 @@ impl ResourceLimiter {
         role: Option<&Role>,
         operation: &Operation,
     ) -> Result<(), RateLimitError> {
-        let mut user_usage_lock = self.usage.user_usage.lock().unwrap();
+        let mut user_usage_lock = self.usage.user_usage.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let usage = user_usage_lock
             .entry(user.clone())
-            .or_insert_with(UserUsage::default);
+            .or_default();
         usage.reset_if_minute_elapsed();
 
         let limits = role
@@ -204,10 +196,11 @@ impl ResourceLimiter {
     }
 
     pub fn increment_usage(&self, user: &UserId, operation: &Operation) {
-        let mut user_usage_lock = self.usage.user_usage.lock().unwrap();
+        let mut user_usage_lock = self.usage.user_usage.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let usage = user_usage_lock
             .entry(user.clone())
-            .or_insert_with(UserUsage::default);
+            .or_default();
 
         match operation {
             Operation::Command => {
@@ -240,16 +233,17 @@ impl ResourceLimiter {
             Cow::Owned([truncated, message.as_bytes()].concat())
         }
     }
-    pub async fn acquire_slot(
+    pub fn acquire_slot(
         &self,
         user: &UserId,
         role: Option<&Role>,
         operation: Operation,
     ) -> Result<ResourceSlot, ResourceError> {
-        let mut user_usage_lock = self.usage.user_usage.lock().unwrap();
+        let mut user_usage_lock = self.usage.user_usage.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let usage = user_usage_lock
             .entry(user.clone())
-            .or_insert_with(UserUsage::default);
+            .or_default();
 
         let limits = role
             .map(|r| r.as_str())
@@ -331,6 +325,23 @@ mod tests {
     use crate::sandbox::config::RoleLimitConfig;
     use std::collections::HashMap;
 
+    fn make_limiter(role_limits: HashMap<String, RoleLimitConfig>) -> ResourceLimiter {
+        ResourceLimiter::new(ResourceLimits {
+            max_commands_per_minute: 5,
+            max_file_ops_per_minute: 5,
+            max_web_requests_per_minute: 5,
+            max_command_output_bytes: 1024,
+            max_file_read_bytes: 1024,
+            max_web_response_bytes: 1024,
+            command_timeout_seconds: 60,
+            file_operation_timeout_seconds: 60,
+            web_request_timeout_seconds: 60,
+            max_concurrent_commands: 2,
+            max_concurrent_subagents: 2,
+            role_limits,
+        })
+    }
+
     #[test]
     fn test_role_based_rate_limiting() {
         let mut role_limits = HashMap::new();
@@ -355,22 +366,7 @@ mod tests {
             },
         );
 
-        let limits = ResourceLimits {
-            max_commands_per_minute: 5,
-            max_file_ops_per_minute: 5,
-            max_web_requests_per_minute: 5,
-            max_command_output_bytes: 1024,
-            max_file_read_bytes: 1024,
-            max_web_response_bytes: 1024,
-            command_timeout_seconds: 60,
-            file_operation_timeout_seconds: 60,
-            web_request_timeout_seconds: 60,
-            max_concurrent_commands: 2,
-            max_concurrent_subagents: 2,
-            role_limits,
-        };
-
-        let limiter = ResourceLimiter::new(limits);
+        let limiter = make_limiter(role_limits);
         let guest_user = UserId("guest_user".to_string());
         let admin_user = UserId("admin_user".to_string());
         let guest_role = Role::Guest;
@@ -378,11 +374,9 @@ mod tests {
 
         // Guest user hits their limit at 2 commands
         for _ in 0..2 {
-            assert!(
-                limiter
-                    .check_rate_limit(&guest_user, Some(&guest_role), &Operation::Command)
-                    .is_ok()
-            );
+            assert!(limiter
+                .check_rate_limit(&guest_user, Some(&guest_role), &Operation::Command)
+                .is_ok());
             limiter.increment_usage(&guest_user, &Operation::Command);
         }
         assert!(matches!(
@@ -392,16 +386,89 @@ mod tests {
 
         // Admin user can do 10 commands
         for _ in 0..10 {
-            assert!(
-                limiter
-                    .check_rate_limit(&admin_user, Some(&admin_role), &Operation::Command)
-                    .is_ok()
-            );
+            assert!(limiter
+                .check_rate_limit(&admin_user, Some(&admin_role), &Operation::Command)
+                .is_ok());
             limiter.increment_usage(&admin_user, &Operation::Command);
         }
         assert!(matches!(
             limiter.check_rate_limit(&admin_user, Some(&admin_role), &Operation::Command),
             Err(RateLimitError::CommandLimitExceeded { limit: 10, .. })
         ));
+    }
+
+    #[test]
+    fn test_output_truncation() {
+        let limiter = make_limiter(HashMap::new());
+        let small_output = vec![0u8; 512];
+        let large_output = vec![0u8; 2048];
+
+        // Small output should not be truncated
+        let result = limiter.truncate_output(&small_output, &Operation::Command);
+        assert_eq!(result.len(), 512);
+
+        // Large output should be truncated to max_command_output_bytes (1024)
+        let result = limiter.truncate_output(&large_output, &Operation::Command);
+        assert!(result.len() > 1024); // 1024 bytes + truncation message
+        let result_str = String::from_utf8_lossy(&result);
+        assert!(result_str.contains("[TRUNCATED:"));
+    }
+
+    #[test]
+    fn test_concurrency_slot_acquire_and_drop() {
+        let limiter = make_limiter(HashMap::new());
+        let user = UserId("test_user".to_string());
+
+        // Acquire 2 slots (limit is 2)
+        let slot1 = limiter.acquire_slot(&user, None, Operation::Command).unwrap();
+        let slot2 = limiter.acquire_slot(&user, None, Operation::Command).unwrap();
+
+        // Third should fail
+        assert!(matches!(
+            limiter.acquire_slot(&user, None, Operation::Command),
+            Err(ResourceError::ConcurrencyLimitExceeded)
+        ));
+
+        // Drop one slot, then acquire should succeed
+        drop(slot1);
+        assert!(limiter.acquire_slot(&user, None, Operation::Command).is_ok());
+
+        drop(slot2);
+    }
+
+    #[test]
+    fn test_file_op_and_web_request_rate_limits() {
+        let limiter = make_limiter(HashMap::new());
+        let user = UserId("test_user".to_string());
+
+        // Fill up file ops (limit is 5)
+        for _ in 0..5 {
+            assert!(limiter.check_rate_limit(&user, None, &Operation::FileOp).is_ok());
+            limiter.increment_usage(&user, &Operation::FileOp);
+        }
+        assert!(matches!(
+            limiter.check_rate_limit(&user, None, &Operation::FileOp),
+            Err(RateLimitError::FileOpLimitExceeded)
+        ));
+
+        // Fill up web requests (limit is 5)
+        for _ in 0..5 {
+            assert!(limiter.check_rate_limit(&user, None, &Operation::WebRequest).is_ok());
+            limiter.increment_usage(&user, &Operation::WebRequest);
+        }
+        assert!(matches!(
+            limiter.check_rate_limit(&user, None, &Operation::WebRequest),
+            Err(RateLimitError::WebRequestLimitExceeded)
+        ));
+    }
+
+    #[test]
+    fn test_seconds_until_reset_no_underflow() {
+        let usage = UserUsage::default();
+        // Freshly created, should be close to 60
+        assert!(usage.seconds_until_reset() <= 60);
+        // Even after time passes, should never panic or wrap
+        let result = 60u64.saturating_sub(120);
+        assert_eq!(result, 0);
     }
 }

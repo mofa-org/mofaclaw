@@ -183,7 +183,8 @@ impl ToolRegistryExecutor {
 fn map_tool_to_operation(name: &str) -> Option<crate::sandbox::resource::Operation> {
     match name {
         "exec" => Some(crate::sandbox::resource::Operation::Command),
-        "read_file" | "write_file" | "edit_file" | "list_dir" => {
+        "read_file" => Some(crate::sandbox::resource::Operation::FileRead),
+        "write_file" | "edit_file" | "list_dir" => {
             Some(crate::sandbox::resource::Operation::FileOp)
         }
         "web_search" | "web_fetch" => Some(crate::sandbox::resource::Operation::WebRequest),
@@ -218,7 +219,6 @@ impl mofa_sdk::llm::ToolExecutor for ToolRegistryExecutor {
             Some(
                 limiter
                     .acquire_slot(&user, self.role.as_ref(), op.clone())
-                    .await
                     .map_err(|e| mofa_sdk::llm::LLMError::Other(e.to_string()))?,
             )
         } else {

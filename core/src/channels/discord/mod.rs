@@ -3,6 +3,7 @@
 pub mod components;
 
 use super::base::Channel;
+use std::collections::HashMap;
 use crate::bus::MessageBus;
 use crate::config::DiscordConfig;
 use crate::error::{ChannelError, Result};
@@ -12,8 +13,11 @@ use crate::permissions::{PermissionLevel, PermissionManager};
 use crate::rbac::{RbacManager, Role};
 use async_trait::async_trait;
 use poise::serenity_prelude as serenity;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::Command as TokioCommand;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 /// poise data
@@ -22,6 +26,8 @@ pub struct Data {
     pub bus: MessageBus,
     /// discord configuration
     pub config: DiscordConfig,
+    /// active mofa-effect sessions keyed by channel id
+    pub mofa_sessions: Arc<RwLock<HashMap<u64, Arc<MofaSession>>>>,
 }
 
 /// discord channel using serenity and poise
@@ -32,6 +38,12 @@ pub struct DiscordChannel {
     http: Arc<RwLock<Option<Arc<serenity::Http>>>>,
     permissions: PermissionManager,
     rbac_manager: Option<Arc<RbacManager>>,
+}
+
+/// A running mofa-effect session (Python process) attached to a Discord channel.
+/// It holds a handle to the child stdin so Discord messages can be forwarded.
+pub struct MofaSession {
+    pub stdin: Mutex<tokio::process::ChildStdin>,
 }
 
 /// poise error type
@@ -164,7 +176,7 @@ impl DiscordChannel {
             running: Arc::new(RwLock::new(true)),
             http: Arc::new(RwLock::new(None)),
             permissions,
-            rbac_manager: None, // Will be set if RBAC is configured
+            rbac_manager: None, // not used in this context
         }
     }
 
@@ -401,6 +413,304 @@ async fn issue(
         ctx.send(poise::CreateReply::default().embed(error_embed))
             .await?;
     }
+
+    Ok(())
+}
+
+/// Run a mofa-effect terminal session and mirror its I/O in Discord.
+#[poise::command(slash_command, rename = "mofa-effect")]
+async fn mofa_effect(
+    ctx: poise::Context<'_, Data, DiscordError>,
+) -> std::result::Result<(), DiscordError> {
+    // show typing indicator
+    let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
+
+    let channel_id = ctx.channel_id();
+    let channel_key = channel_id.get();
+
+    // Check if a session is already running in this channel
+    {
+        let sessions_guard = ctx.data().mofa_sessions.read().await;
+        if sessions_guard.contains_key(&channel_key) {
+            ctx.send(
+                poise::CreateReply::default()
+                    .content("A mofa-effect session is already running in this channel. Finish it before starting a new one.")
+                    .ephemeral(true),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
+    ctx.send(
+        poise::CreateReply::default()
+            .content("Starting mofa-effect session...\nAll messages you send in this channel will be forwarded to the session until it exits.")
+            .ephemeral(true),
+    )
+    .await?;
+
+    // Determine project root (where Cargo.toml lives)
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mofa_comp_dir = project_root.join("mofa-effect").join("comp");
+
+    // Spawn python main.py in mofa-effect/comp
+    let mut cmd = TokioCommand::new("python");
+    cmd.arg("-u")
+        .arg("main.py")
+        .env("PYTHONUNBUFFERED", "1")
+        .current_dir(&mofa_comp_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("failed to spawn mofa-effect process: {}", e);
+            ctx.send(
+                poise::CreateReply::default()
+                    .content(format!("Failed to start mofa-effect: {}", e))
+                    .ephemeral(true),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let stdin = child.stdin.take().ok_or_else(|| {
+        serenity::Error::Other("failed to capture mofa-effect stdin (no handle)")
+    })?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        serenity::Error::Other("failed to capture mofa-effect stdout (no handle)")
+    })?;
+    let stderr = child.stderr.take();
+
+    let session = Arc::new(MofaSession {
+        stdin: Mutex::new(stdin),
+    });
+
+    {
+        let mut sessions_guard = ctx.data().mofa_sessions.write().await;
+        sessions_guard.insert(channel_key, session.clone());
+    }
+
+    let http = ctx.serenity_context().http.clone();
+    let sessions_map = ctx.data().mofa_sessions.clone();
+
+    // Path to render_report.json we will watch after the Python process exits
+    let report_path = mofa_comp_dir.join("output").join("render_report.json");
+    let root_for_http = project_root.join("mofa-effect");
+
+    // Background task: stream stdout/stderr to Discord and then watch for final video
+    tokio::spawn(async move {
+        // Stream stdout in chunks rather than one line per message.
+        let mut reader = BufReader::new(stdout).lines();
+        let mut buffer = String::new();
+        let mut line_count: usize = 0;
+        while let Ok(Some(line)) = reader.next_line().await {
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if !buffer.is_empty() {
+                buffer.push('\n');
+            }
+            buffer.push_str(trimmed);
+            line_count += 1;
+
+            // Heuristics to decide when to flush:
+            // - buffer is getting large
+            // - we've accumulated enough lines
+            // - this line looks like a prompt that expects user input
+            let is_prompt = trimmed.ends_with(':')
+                || trimmed.contains("Comp file path")
+                || trimmed.contains("Make changes? (yes/no)")
+                || trimmed.contains("New text (Enter to keep)")
+                || trimmed.contains("New (e.g. WELCOME / TO / MOFA")
+                || trimmed.contains("Your file path (or type 'None' for placeholder)")
+                || trimmed.contains("New hex color, e.g. #ff3300")
+                || trimmed.contains("Enter number (1-")
+                || trimmed.contains("Choose the font to use for all text in this video");
+
+            let too_big = buffer.len() > 1700 || line_count >= 12;
+
+            if is_prompt || too_big {
+                let content = format!("```text\n{}\n```", buffer);
+                if let Err(e) = channel_id.say(&http, content).await {
+                    error!("failed to send mofa-effect stdout to discord: {}", e);
+                    break;
+                }
+                buffer.clear();
+                line_count = 0;
+            }
+        }
+
+        if !buffer.is_empty() {
+            let content = format!("```text\n{}\n```", buffer);
+            let _ = channel_id.say(&http, content).await;
+        }
+
+        // Optionally stream stderr (as a single block when done)
+        if let Some(err) = stderr {
+            let mut err_reader = BufReader::new(err);
+            let mut buf = Vec::new();
+            if err_reader.read_to_end(&mut buf).await.is_ok() && !buf.is_empty() {
+                let text = String::from_utf8_lossy(&buf);
+                let content = format!("```text\n[stderr]\n{}\n```", text);
+                let _ = channel_id.say(&http, content).await;
+            }
+        }
+
+        // Wait for child process to exit
+        match child.wait().await {
+            Ok(status) => {
+                info!("mofa-effect process exited with status: {}", status);
+            }
+            Err(e) => {
+                error!("failed to wait for mofa-effect process: {}", e);
+            }
+        }
+
+        // Remove session mapping
+        {
+            let mut sessions_guard = sessions_map.write().await;
+            sessions_guard.remove(&channel_key);
+        }
+
+        // Let the user know that setup is done and they should run the MoFA_Render script.
+        let _ = channel_id
+            .say(
+                &http,
+                "MoFA setup complete. In DaVinci Resolve, go to `Workspace → Scripts → MoFA_Render` to start rendering.\n\
+I will watch for the rendered video file and post a link here once it is ready.",
+            )
+            .await;
+
+        // Try to read render_report.json to find expected output path
+        if let Ok(text) = tokio::fs::read_to_string(&report_path).await {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(expected) = json
+                    .get("expected_output")
+                    .and_then(|v| v.as_str())
+                    .map(|s| PathBuf::from(s))
+                {
+                    // Start python -m http.server in background (root_for_http as cwd)
+                    let mut http_cmd = TokioCommand::new("python");
+                    http_cmd
+                        .arg("-m")
+                        .arg("http.server")
+                        .arg("8000")
+                        .current_dir(&root_for_http)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                    if let Err(e) = http_cmd.spawn() {
+                        // Likely already running; log and continue
+                        warn!("failed to start http.server (maybe already running): {}", e);
+                    }
+
+                    // Compute initial expected video path and parent directory
+                    let mut video_path = expected;
+                    let output_dir = video_path
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| root_for_http.join("comp").join("output"));
+
+                    // Wait for video file to appear. If the exact expected path never
+                    // shows up (e.g. Resolve wrote .mov instead of .mp4), fall back
+                    // to using the most recent *_mofa_* video in the output directory.
+                    let max_wait = std::time::Duration::from_secs(60 * 60);
+                    let start = std::time::Instant::now();
+                    loop {
+                        if start.elapsed() > max_wait {
+                            let _ = channel_id
+                                .say(
+                                    &http,
+                                    "Timed out waiting for rendered video file to appear.",
+                                )
+                                .await;
+                            break;
+                        }
+
+                        // 1) Check the originally expected path.
+                        let mut found_path: Option<PathBuf> = None;
+                        if tokio::fs::metadata(&video_path)
+                            .await
+                            .map(|m| m.len() > 0)
+                            .unwrap_or(false)
+                        {
+                            found_path = Some(video_path.clone());
+                        } else {
+                            // 2) Fallback: scan output_dir for the newest *_mofa_* .mp4/.mov.
+                            if let Ok(mut dir) = tokio::fs::read_dir(&output_dir).await {
+                                let mut newest: Option<(PathBuf, std::time::SystemTime)> = None;
+                                while let Ok(Some(entry)) = dir.next_entry().await {
+                                    let path: PathBuf = entry.path();
+                                    if !path.is_file() {
+                                        continue;
+                                    }
+                                    let name_opt = path
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .map(|s| s.to_string());
+                                    let name: String = match name_opt {
+                                        Some(n) => n,
+                                        None => continue,
+                                    };
+                                    if !name.contains("_mofa_") {
+                                        continue;
+                                    }
+                                    let ext = path
+                                        .extension()
+                                        .and_then(|e| e.to_str())
+                                        .unwrap_or("")
+                                        .to_lowercase();
+                                    if ext != "mp4" && ext != "mov" {
+                                        continue;
+                                    }
+                                    if let Ok(meta) = tokio::fs::metadata(&path).await {
+                                        if meta.len() == 0 {
+                                            continue;
+                                        }
+                                        if let Ok(modified) = meta.modified() {
+                                            match newest {
+                                                Some((_, ts)) if modified <= ts => {}
+                                                _ => {
+                                                    newest = Some((path.clone(), modified));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some((path, _)) = newest {
+                                    found_path = Some(path);
+                                }
+                            }
+                        }
+
+                        if let Some(final_path) = found_path {
+                            video_path = final_path;
+                            let rel = match video_path.strip_prefix(&root_for_http) {
+                                Ok(p) => p.to_path_buf(),
+                                Err(_) => video_path.clone(),
+                            };
+                            let url = format!(
+                                "http://localhost:8000/{}",
+                                rel.to_string_lossy().replace('\\', "/")
+                            );
+                            let msg =
+                                format!("Here is your video link:\n{}", url);
+                            let _ = channel_id.say(&http, msg).await;
+                            break;
+                        }
+
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        }
+    });
 
     Ok(())
 }
@@ -1811,6 +2121,7 @@ impl Channel for DiscordChannel {
         struct MessageHandler {
             bus: MessageBus,
             config: DiscordConfig,
+            mofa_sessions: Arc<RwLock<HashMap<u64, Arc<MofaSession>>>>,
         }
 
         #[serenity::async_trait]
@@ -1818,6 +2129,22 @@ impl Channel for DiscordChannel {
             async fn message(&self, ctx: serenity::Context, new_message: serenity::Message) {
                 if new_message.author.bot {
                     return;
+                }
+
+                // If a mofa-effect session is active for this channel, forward input to it
+                let channel_key = new_message.channel_id.get();
+                {
+                    let sessions_guard = self.mofa_sessions.read().await;
+                    if let Some(session) = sessions_guard.get(&channel_key) {
+                        let mut stdin = session.stdin.lock().await;
+                        if let Err(e) = stdin
+                            .write_all(format!("{}\n", new_message.content).as_bytes())
+                            .await
+                        {
+                            error!("failed to write to mofa-effect stdin: {}", e);
+                        }
+                        return;
+                    }
                 }
 
                 let in_guild = new_message.guild_id.is_some();
@@ -2029,6 +2356,10 @@ impl Channel for DiscordChannel {
             }
         }
 
+        let mofa_sessions: Arc<RwLock<HashMap<u64, Arc<MofaSession>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let mofa_sessions_for_setup = mofa_sessions.clone();
+
         let framework = poise::Framework::builder()
             .options(poise::FrameworkOptions {
                 commands: vec![
@@ -2040,6 +2371,7 @@ impl Channel for DiscordChannel {
                     weather(),
                     tmux(),
                     skill(),
+                    mofa_effect(),
                     workspace_view(),
                     workspace_heartbeat_list(),
                     workspace_memory_view(),
@@ -2055,6 +2387,7 @@ impl Channel for DiscordChannel {
                 let http_ref = http_ref_setup.clone();
                 let bus = bus_clone.clone();
                 let config = config_clone.clone();
+                let mofa_sessions = mofa_sessions_for_setup.clone();
                 Box::pin(async move {
                     info!("discord bot connected as {}", _ready.user.name);
                     *http_ref.write().await = Some(ctx.http.clone());
@@ -2090,7 +2423,11 @@ impl Channel for DiscordChannel {
                         }
                     }
 
-                    Ok(Data { bus, config })
+                    Ok(Data {
+                        bus,
+                        config,
+                        mofa_sessions,
+                    })
                 })
             })
             .build();
@@ -2098,6 +2435,7 @@ impl Channel for DiscordChannel {
         let message_handler = MessageHandler {
             bus: bus_message.clone(),
             config: config_message.clone(),
+            mofa_sessions,
         };
 
         let mut client = serenity::ClientBuilder::new(&config.token, intents)

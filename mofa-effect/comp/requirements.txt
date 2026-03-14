@@ -1,0 +1,12 @@
+# Main logic and API handling
+requests==2.32.5
+urllib3==2.6.3
+
+# Text-to-Speech and Media
+edge-tts==7.2.7
+imageio-ffmpeg==0.6.0
+pillow==12.1.1
+
+# Utilities 
+tabulate==0.10.0
+packaging==25.0

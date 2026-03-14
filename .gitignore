@@ -21,3 +21,6 @@ docs/
 
 # test files
 test_weather_format
+mofa-effect/comp/testing_files
+extra_files
+third_party/videolizer

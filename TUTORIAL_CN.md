@@ -18,6 +18,7 @@
   - [深入了解：配置系统](#深入了解配置系统)
   - [深入了解：错误处理](#深入了解错误处理)
 - [工作区](#工作区)
+- [安全与访问控制 (RBAC)](#安全与访问控制-rbac)
 - [实战：添加一个 Skill](#实战添加一个-skill)
 - [实战：添加一个 Tool](#实战添加一个-tool)
 - [实战：添加一个 Channel](#实战添加一个-channel)
@@ -416,6 +417,66 @@ pub enum MofaclawError {
 ---
 
 ## 工作区
+---
+
+## 安全与访问控制 (RBAC)
+
+mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以为 AI 的能力提供沙箱环境。这能够在 AI 使用执行 Shell 命令或访问文件系统等工具时，保护您的系统免受意外损坏或恶意提示词注入的攻击。
+
+### 角色 (Roles)
+代理的权限由 `config.json` 中配置的 `role` 决定。
+- **Guest (访客)**: 权限严格受限。仅对特定文件夹拥有只读访问权限。无法执行 Shell 命令。
+- **Member (成员)** (默认): 标准权限。可以读写工作区，并能运行安全的已列入白名单的命令。
+- **Admin (管理员)**: 拥有管理系统的扩展权限。
+- **SuperAdmin (超级管理员)**: 无限制访问权限（绕过所有沙箱限制）。
+
+### 🛡️ 文件系统沙箱 (路径白名单)
+默认情况下，AI 无法读取或写入您机器上的任意路径。Mofaclaw 通过为每个角色强制执行严格的 `path_whitelist` (路径白名单) 来实现这一点。
+
+`config.json` 中的配置示例：
+```json
+"rbac": {
+  "operations": {
+    "fs_read": {
+      "path_whitelist": {
+        "guest": ["${workspace}/**"],
+        "member": ["${workspace}/**", "${home}/projects/**"]
+      }
+    },
+    "fs_write": {
+      "path_whitelist": {
+        "member": ["${workspace}/**"]
+      }
+    }
+  }
+}
+```
+*类似 `${workspace}` 和 `${home}` 的变量会被自动解析。*
+
+### 🛡️ Shell 命令沙箱 (命令白名单)
+AI 会被阻止运行诸如 `rm -rf /` 或 `sudo` 等危险命令。您可以使用 `safe_commands` 白名单来配置精确的允许命令或模式。
+
+```json
+"rbac": {
+  "operations": {
+    "safe_commands": {
+      "path_whitelist": {
+        "member": [
+          "ls *",
+          "cat *",
+          "git status",
+          "gh issue *"
+        ]
+      }
+    }
+  }
+}
+```
+
+### 📋 审计日志 (Audit Logging)
+为了确保透明度，mofaclaw 会在后台记录所有 RBAC 权限检查。如果 AI 被拒绝访问文件或执行命令，`AuditLogger` 会记录下来并附带明确原因 (例如：`RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`)。
+
+---
 
 运行 `mofaclaw onboard` 后，会创建一个作为代理工作环境的工作区：
 

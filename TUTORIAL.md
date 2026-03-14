@@ -18,6 +18,7 @@ Welcome! This tutorial is designed for **GSoC students** and new contributors wh
   - [Deep Dive: Configuration System](#deep-dive-configuration-system)
   - [Deep Dive: Error Handling](#deep-dive-error-handling)
 - [The Workspace](#the-workspace)
+- [Security & Access Control (RBAC)](#security--access-control-rbac)
 - [Hands-on: Add a Skill](#hands-on-add-a-skill)
 - [Hands-on: Add a Tool](#hands-on-add-a-tool)
 - [Hands-on: Add a Channel](#hands-on-add-a-channel)
@@ -416,6 +417,66 @@ Each variant carries context. For example, `ToolError::ExecutionFailed` includes
 ---
 
 ## The Workspace
+---
+
+## Security & Access Control (RBAC)
+
+mofaclaw includes a powerful Role-Based Access Control (RBAC) system that sandboxes the AI's capabilities. This protects your system from accidental damage or malicious prompt injections when using tools like shell execution or file system access.
+
+### Roles
+The agent's permissions are defined by the `role` configured in your `config.json`.
+- **Guest**: Highly restricted. Read-only access to specific folders. No shell commands.
+- **Member** (Default): Standard access. Can read/write to the workspace and run safe commands.
+- **Admin**: Extended access for managing the system.
+- **SuperAdmin**: Unlimited access (Bypasses all sandboxing).
+
+### 🛡️ Filesystem Sandbox (Path Whitelisting)
+By default, the AI cannot read or write to arbitrary paths on your machine. Mofaclaw enforces a strict `path_whitelist` per role.
+
+Example configuration in `config.json`:
+```json
+"rbac": {
+  "operations": {
+    "fs_read": {
+      "path_whitelist": {
+        "guest": ["${workspace}/**"],
+        "member": ["${workspace}/**", "${home}/projects/**"]
+      }
+    },
+    "fs_write": {
+      "path_whitelist": {
+        "member": ["${workspace}/**"]
+      }
+    }
+  }
+}
+```
+*Variables like `${workspace}` and `${home}` are automatically resolved.*
+
+### 🛡️ Shell Command Sandbox (Command Whitelisting)
+The AI is prevented from running dangerous commands like `rm -rf /` or `sudo`. You can configure exact commands or patterns using the `safe_commands` whitelist.
+
+```json
+"rbac": {
+  "operations": {
+    "safe_commands": {
+      "path_whitelist": {
+        "member": [
+          "ls *",
+          "cat *",
+          "git status",
+          "gh issue *"
+        ]
+      }
+    }
+  }
+}
+```
+
+### 📋 Audit Logging
+To ensure transparency, mofaclaw logs all RBAC permission checks in the background. If the AI is denied access to a file or command, it is recorded by the `AuditLogger` with the exact reason (e.g., `RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`).
+
+---
 
 When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's working environment:
 

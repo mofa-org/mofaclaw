@@ -15,9 +15,16 @@ Check CI status on a PR:
 gh pr checks 55 --repo owner/repo
 ```
 
+## CI/CD Status View
+
 List recent workflow runs:
 ```bash
 gh run list --repo owner/repo --limit 10
+```
+
+List runs filtered by workflow:
+```bash
+gh run list --repo owner/repo --limit 10 --workflow ci.yml
 ```
 
 View a run and see which steps failed:
@@ -30,6 +37,28 @@ View logs for failed steps only:
 gh run view <run-id> --repo owner/repo --log-failed
 ```
 
+Monitor a run in real-time (blocks until complete):
+```bash
+gh run watch <run-id> --repo owner/repo --exit-status
+```
+
+View PR CI check results:
+```bash
+gh pr checks <pr-number> --repo owner/repo
+```
+
+### Status Indicators
+Use these emoji when formatting CI/CD results:
+- ✅ success / pass
+- ❌ failure / fail
+- 🟡 in_progress / pending
+- ⏳ queued / waiting
+
+### JSON output for CI runs
+```bash
+gh run list --repo owner/repo --json databaseId,status,conclusion,name,headBranch,event,createdAt --limit 10
+```
+
 ## API for Advanced Queries
 
 The `gh api` command is useful for accessing data not available through other subcommands.
@@ -37,6 +66,11 @@ The `gh api` command is useful for accessing data not available through other su
 Get PR with specific fields:
 ```bash
 gh api repos/owner/repo/pulls/55 --jq '.title, .state, .user.login'
+```
+
+Get workflow runs via API:
+```bash
+gh api repos/owner/repo/actions/runs --jq '.workflow_runs[:5] | .[] | "\(.id) \(.status) \(.conclusion) \(.name)"'
 ```
 
 ## JSON Output

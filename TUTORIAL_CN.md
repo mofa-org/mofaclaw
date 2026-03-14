@@ -416,6 +416,50 @@ pub enum MofaclawError {
 ---
 
 ## 工作区
+---
+
+## 安全与访问控制 (RBAC)
+
+mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以为 AI 的能力提供沙箱环境。这能够在 AI 使用执行 Shell 命令或访问文件系统等工具时，保护您的系统免受意外损坏或恶意提示词注入的攻击。
+
+### 角色 (Roles)
+代理的权限由 `config.json` 中 `rbac.default_role` 指定的默认角色，以及各渠道通过 `rbac.role_mappings` / `user_overrides` 解析得到的实际角色共同决定。
+- **Guest (访客)**: 权限严格受限。仅对特定文件夹拥有只读访问权限。无法执行 Shell 命令。
+- **Member (成员)** (默认): 标准权限。可以读写工作区，并能运行安全的已列入白名单的命令。
+- **Admin (管理员)**: 拥有管理系统的扩展权限。
+- **SuperAdmin (超级管理员)**: 无限制访问权限（绕过所有沙箱限制）。
+
+### 🛡️ 文件系统沙箱 (路径白名单)
+当配置文件系统权限时，mofaclaw 会限制 AI 可以读写哪些路径。在这种情况下，只有匹配角色 `path_whitelist`（路径白名单）的路径才被允许访问；如果未配置相关权限，则文件系统访问不受 RBAC 限制。
+
+`config.json` 中的配置示例：
+```json
+"rbac": {
+  "permissions": {
+    "tools": {
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+*类似 `${workspace}` 和 `${home}` 的变量会被自动解析。*
+
+---
+
 
 运行 `mofaclaw onboard` 后，会创建一个作为代理工作环境的工作区：
 

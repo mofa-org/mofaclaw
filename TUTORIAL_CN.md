@@ -424,28 +424,34 @@ pub enum MofaclawError {
 mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以为 AI 的能力提供沙箱环境。这能够在 AI 使用执行 Shell 命令或访问文件系统等工具时，保护您的系统免受意外损坏或恶意提示词注入的攻击。
 
 ### 角色 (Roles)
-代理的权限由 `config.json` 中配置的 `role` 决定。
+代理的权限由 `config.json` 中 `rbac.default_role` 指定的默认角色，以及各渠道通过 `rbac.role_mappings` / `user_overrides` 解析得到的实际角色共同决定。
 - **Guest (访客)**: 权限严格受限。仅对特定文件夹拥有只读访问权限。无法执行 Shell 命令。
 - **Member (成员)** (默认): 标准权限。可以读写工作区，并能运行安全的已列入白名单的命令。
 - **Admin (管理员)**: 拥有管理系统的扩展权限。
 - **SuperAdmin (超级管理员)**: 无限制访问权限（绕过所有沙箱限制）。
 
 ### 🛡️ 文件系统沙箱 (路径白名单)
-默认情况下，AI 无法读取或写入您机器上的任意路径。Mofaclaw 通过为每个角色强制执行严格的 `path_whitelist` (路径白名单) 来实现这一点。
+当配置文件系统权限时，mofaclaw 会限制 AI 可以读写哪些路径。在这种情况下，只有匹配角色 `path_whitelist`（路径白名单）的路径才被允许访问；如果未配相关权限，则文件系统访问不受 RBAC 限制。
 
 `config.json` 中的配置示例：
 ```json
 "rbac": {
-  "operations": {
-    "fs_read": {
-      "path_whitelist": {
-        "guest": ["${workspace}/**"],
-        "member": ["${workspace}/**", "${home}/projects/**"]
-      }
-    },
-    "fs_write": {
-      "path_whitelist": {
-        "member": ["${workspace}/**"]
+  "permissions": {
+    "tools": {
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
       }
     }
   }
@@ -454,19 +460,22 @@ mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以
 *类似 `${workspace}` 和 `${home}` 的变量会被自动解析。*
 
 ### 🛡️ Shell 命令沙箱 (命令白名单)
-AI 会被阻止运行诸如 `rm -rf /` 或 `sudo` 等危险命令。您可以使用 `safe_commands` 白名单来配置精确的允许命令或模式。
+当启用 RBAC 且配置了 `shell.safe_commands` 操作时，AI 只允许执行匹配白名单的命令；未列入白名单的命令（包括类似 `rm -rf /` 或 `sudo` 的危险命令）将被阻止。如果在启用 RBAC 的情况下未配置 `shell.safe_commands`，则默认允许命令执行；而当禁用 RBAC 时，系统将使用旧版的 `is_dangerous_command` 进行检查。您可以使用 `safe_commands` 白名单来配置精确的允许命令或模式。
 
 ```json
 "rbac": {
-  "operations": {
-    "safe_commands": {
-      "path_whitelist": {
-        "member": [
-          "ls *",
-          "cat *",
-          "git status",
-          "gh issue *"
-        ]
+  "permissions": {
+    "tools": {
+      "shell": {
+        "safe_commands": {
+          "min_role": "member",
+          "allowed": [
+            "ls *",
+            "cat *",
+            "git status",
+            "gh issue *"
+          ]
+        }
       }
     }
   }
@@ -474,7 +483,7 @@ AI 会被阻止运行诸如 `rm -rf /` 或 `sudo` 等危险命令。您可以使
 ```
 
 ### 📋 审计日志 (Audit Logging)
-为了确保透明度，mofaclaw 会在后台记录所有 RBAC 权限检查。如果 AI 被拒绝访问文件或执行命令，`AuditLogger` 会记录下来并附带明确原因 (例如：`RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`)。
+为了确保透明度，mofaclaw 提供可选的 RBAC 审计日志能力。你可以在 RBAC 权限检查或工具权限检查流程中显式接入 `AuditLogger`（例如调用 `AuditLogger::log`），以记录每一次检查及其结果。例如，当 AI 被拒绝访问文件或执行命令时，可以记录类似：`RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`。
 
 ---
 

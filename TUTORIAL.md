@@ -424,28 +424,35 @@ Each variant carries context. For example, `ToolError::ExecutionFailed` includes
 mofaclaw includes a powerful Role-Based Access Control (RBAC) system that sandboxes the AI's capabilities. This protects your system from accidental damage or malicious prompt injections when using tools like shell execution or file system access.
 
 ### Roles
-The agent's permissions are defined by the `role` configured in your `config.json`.
+The agent's permissions are determined by your RBAC configuration: the global default comes from `rbac.default_role`, and individual channels can override it via `rbac.role_mappings` and `rbac.user_overrides` in `config.json`.
 - **Guest**: Highly restricted. Read-only access to specific folders. No shell commands.
 - **Member** (Default): Standard access. Can read/write to the workspace and run safe commands.
 - **Admin**: Extended access for managing the system.
 - **SuperAdmin**: Unlimited access (Bypasses all sandboxing).
 
 ### 🛡️ Filesystem Sandbox (Path Whitelisting)
-By default, the AI cannot read or write to arbitrary paths on your machine. Mofaclaw enforces a strict `path_whitelist` per role.
+When RBAC filesystem permissions are configured, mofaclaw can restrict which paths the AI may read or write.
+In that case, access is allowed only for paths matching the role's configured `path_whitelist`; if no such permissions are defined, filesystem access is not restricted by RBAC.
 
 Example configuration in `config.json`:
 ```json
 "rbac": {
-  "operations": {
-    "fs_read": {
-      "path_whitelist": {
-        "guest": ["${workspace}/**"],
-        "member": ["${workspace}/**", "${home}/projects/**"]
-      }
-    },
-    "fs_write": {
-      "path_whitelist": {
-        "member": ["${workspace}/**"]
+  "permissions": {
+    "tools": {
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
       }
     }
   }
@@ -454,19 +461,22 @@ Example configuration in `config.json`:
 *Variables like `${workspace}` and `${home}` are automatically resolved.*
 
 ### 🛡️ Shell Command Sandbox (Command Whitelisting)
-The AI is prevented from running dangerous commands like `rm -rf /` or `sudo`. You can configure exact commands or patterns using the `safe_commands` whitelist.
+When RBAC is enabled and a `shell.safe_commands` operation is configured, the AI may only run commands that match the configured whitelist; non-whitelisted commands (including dangerous ones like `rm -rf /` or `sudo`) are blocked. If RBAC is enabled but `shell.safe_commands` is not configured, commands are currently allowed by default, and when RBAC is disabled a legacy `is_dangerous_command` check is used instead. You can configure exact commands or patterns using the `safe_commands` whitelist.
 
 ```json
 "rbac": {
-  "operations": {
-    "safe_commands": {
-      "path_whitelist": {
-        "member": [
-          "ls *",
-          "cat *",
-          "git status",
-          "gh issue *"
-        ]
+  "permissions": {
+    "tools": {
+      "shell": {
+        "safe_commands": {
+          "min_role": "member",
+          "allowed": [
+            "ls *",
+            "cat *",
+            "git status",
+            "gh issue *"
+          ]
+        }
       }
     }
   }
@@ -474,7 +484,7 @@ The AI is prevented from running dangerous commands like `rm -rf /` or `sudo`. Y
 ```
 
 ### 📋 Audit Logging
-To ensure transparency, mofaclaw logs all RBAC permission checks in the background. If the AI is denied access to a file or command, it is recorded by the `AuditLogger` with the exact reason (e.g., `RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`).
+mofaclaw provides an `AuditLogger` component that you can use to record RBAC permission checks. When you wire it into your RBAC or tool execution pipeline, denied accesses can be logged with the exact reason (e.g., `RBAC Audit: user=system role=Member resource=rm -rf / operation=safe_commands result=Denied`).
 
 ---
 

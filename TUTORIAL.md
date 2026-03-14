@@ -416,6 +416,44 @@ Each variant carries context. For example, `ToolError::ExecutionFailed` includes
 ---
 
 ## The Workspace
+---
+
+## Security & Access Control (RBAC)
+
+mofaclaw includes a powerful Role-Based Access Control (RBAC) system that sandboxes the AI's capabilities. This protects your system from accidental damage or malicious prompt injections when using tools like shell execution or file system access.
+
+### Roles
+The agent's permissions are determined by your RBAC configuration: the global default comes from `rbac.default_role`, and individual channels can override it via `rbac.role_mappings` and `rbac.user_overrides` in `config.json`.
+- **Guest**: Highly restricted. Read-only access to specific folders. No shell commands.
+- **Member** (Default): Standard access. Can read/write to the workspace and run safe commands.
+- **Admin**: Extended access for managing the system.
+- **SuperAdmin**: Unlimited access (Bypasses all sandboxing).
+
+### 🛡️ Shell Command Sandbox (Command Whitelisting)
+When RBAC is enabled and a `shell.safe_commands` operation is configured, the AI may only run commands that match the configured whitelist; non-whitelisted commands (including dangerous ones like `rm -rf /` or `sudo`) are blocked. If RBAC is enabled but `shell.safe_commands` is not configured, commands are currently allowed by default, and when RBAC is disabled a legacy `is_dangerous_command` check is used instead. You can configure exact commands or patterns using the `safe_commands` whitelist.
+
+```json
+"rbac": {
+  "permissions": {
+    "tools": {
+      "shell": {
+        "safe_commands": {
+          "min_role": "member",
+          "allowed": [
+            "ls *",
+            "cat *",
+            "git status",
+            "gh issue *"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
 
 When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's working environment:
 

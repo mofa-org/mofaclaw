@@ -416,6 +416,44 @@ pub enum MofaclawError {
 ---
 
 ## 工作区
+---
+
+## 安全与访问控制 (RBAC)
+
+mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以为 AI 的能力提供沙箱环境。这能够在 AI 使用执行 Shell 命令或访问文件系统等工具时，保护您的系统免受意外损坏或恶意提示词注入的攻击。
+
+### 角色 (Roles)
+代理的权限由 `config.json` 中 `rbac.default_role` 指定的默认角色，以及各渠道通过 `rbac.role_mappings` / `user_overrides` 解析得到的实际角色共同决定。
+- **Guest (访客)**: 权限严格受限。仅对特定文件夹拥有只读访问权限。无法执行 Shell 命令。
+- **Member (成员)** (默认): 标准权限。可以读写工作区，并能运行安全的已列入白名单的命令。
+- **Admin (管理员)**: 拥有管理系统的扩展权限。
+- **SuperAdmin (超级管理员)**: 无限制访问权限（绕过所有沙箱限制）。
+
+### 🛡️ Shell 命令沙箱 (命令白名单)
+当启用 RBAC 且配置了 `shell.safe_commands` 操作时，AI 只允许执行匹配白名单的命令；未列入白名单的命令（包括类似 `rm -rf /` 或 `sudo` 的危险命令）将被阻止。如果在启用 RBAC 的情况下未配置 `shell.safe_commands`，则默认允许命令执行；而当禁用 RBAC 时，系统将使用旧版的 `is_dangerous_command` 进行检查。您可以使用 `safe_commands` 白名单来配置精确的允许命令或模式。
+
+```json
+"rbac": {
+  "permissions": {
+    "tools": {
+      "shell": {
+        "safe_commands": {
+          "min_role": "member",
+          "allowed": [
+            "ls *",
+            "cat *",
+            "git status",
+            "gh issue *"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
 
 运行 `mofaclaw onboard` 后，会创建一个作为代理工作环境的工作区：
 

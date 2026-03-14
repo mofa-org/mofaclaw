@@ -197,6 +197,7 @@ impl DiscordChannel {
 
 /// issue management command
 #[poise::command(slash_command)]
+#[allow(clippy::too_many_arguments)]
 async fn issue(
     ctx: poise::Context<'_, Data, DiscordError>,
     #[description = "action type"] action: IssueAction,
@@ -422,6 +423,7 @@ async fn issue(
 
 /// pr management command
 #[poise::command(slash_command)]
+#[allow(clippy::too_many_arguments)]
 async fn pr(
     ctx: poise::Context<'_, Data, DiscordError>,
     #[description = "action type"] action: PrAction,
@@ -1210,44 +1212,43 @@ fn match_command_keywords(content: &str) -> CommandIntent {
             }
             return CommandIntent::Issue("list all github issues".to_string());
         }
-        if lower.contains("view") || lower.contains("show") {
-            // extract issue number
-            if let Some(num) = extract_number(&lower) {
-                return CommandIntent::Issue(format!("view github issue #{}", num));
-            }
+        if (lower.contains("view") || lower.contains("show"))
+            && let Some(num) = extract_number(&lower)
+        {
+            return CommandIntent::Issue(format!("view github issue #{}", num));
         }
-        if lower.contains("close") {
-            if let Some(num) = extract_number(&lower) {
-                return CommandIntent::Issue(format!("close github issue #{}", num));
-            }
+        if lower.contains("close")
+            && let Some(num) = extract_number(&lower)
+        {
+            return CommandIntent::Issue(format!("close github issue #{}", num));
         }
-        if lower.contains("comment") {
-            if let Some(num) = extract_number(&lower) {
-                let comment_body = extract_after_keywords(
-                    &lower,
-                    &["comment on issue", "comment issue", "issue comment"],
-                );
-                if !comment_body.is_empty() {
-                    return CommandIntent::Issue(format!(
-                        "comment on github issue #{} with body: {}",
-                        num, comment_body
-                    ));
-                }
-                return CommandIntent::Issue(format!("comment on github issue #{}", num));
+        if lower.contains("comment")
+            && let Some(num) = extract_number(&lower)
+        {
+            let comment_body = extract_after_keywords(
+                &lower,
+                &["comment on issue", "comment issue", "issue comment"],
+            );
+            if !comment_body.is_empty() {
+                return CommandIntent::Issue(format!(
+                    "comment on github issue #{} with body: {}",
+                    num, comment_body
+                ));
             }
+            return CommandIntent::Issue(format!("comment on github issue #{}", num));
         }
-        if lower.contains("assign") {
-            if let Some(num) = extract_number(&lower) {
-                let user =
-                    extract_after_keywords(&lower, &["assign issue", "issue assign", "assign to"]);
-                if !user.is_empty() {
-                    return CommandIntent::Issue(format!(
-                        "assign github issue #{} to user: {}",
-                        num, user
-                    ));
-                }
-                return CommandIntent::Issue(format!("assign github issue #{}", num));
+        if lower.contains("assign")
+            && let Some(num) = extract_number(&lower)
+        {
+            let user =
+                extract_after_keywords(&lower, &["assign issue", "issue assign", "assign to"]);
+            if !user.is_empty() {
+                return CommandIntent::Issue(format!(
+                    "assign github issue #{} to user: {}",
+                    num, user
+                ));
             }
+            return CommandIntent::Issue(format!("assign github issue #{}", num));
         }
     }
 
@@ -1271,46 +1272,46 @@ fn match_command_keywords(content: &str) -> CommandIntent {
             }
             return CommandIntent::Pr("list all github prs".to_string());
         }
-        if lower.contains("view") || lower.contains("show") {
-            if let Some(num) = extract_number(&lower) {
-                return CommandIntent::Pr(format!("view github pr #{}", num));
-            }
+        if (lower.contains("view") || lower.contains("show"))
+            && let Some(num) = extract_number(&lower)
+        {
+            return CommandIntent::Pr(format!("view github pr #{}", num));
         }
-        if lower.contains("merge") {
-            if let Some(num) = extract_number(&lower) {
+        if lower.contains("merge")
+            && let Some(num) = extract_number(&lower)
+        {
+            return CommandIntent::Pr(format!(
+                "check ci status for pr #{} then merge github pr #{}",
+                num, num
+            ));
+        }
+        if lower.contains("close")
+            && let Some(num) = extract_number(&lower)
+        {
+            return CommandIntent::Pr(format!("close github pr #{}", num));
+        }
+        if lower.contains("comment")
+            && let Some(num) = extract_number(&lower)
+        {
+            let comment_body =
+                extract_after_keywords(&lower, &["comment on pr", "comment pr", "pr comment"]);
+            if !comment_body.is_empty() {
                 return CommandIntent::Pr(format!(
-                    "check ci status for pr #{} then merge github pr #{}",
-                    num, num
+                    "comment on github pr #{} with body: {}",
+                    num, comment_body
                 ));
             }
+            return CommandIntent::Pr(format!("comment on github pr #{}", num));
         }
-        if lower.contains("close") {
-            if let Some(num) = extract_number(&lower) {
-                return CommandIntent::Pr(format!("close github pr #{}", num));
+        if (lower.contains("review") || lower.contains("approve") || lower.contains("reject"))
+            && let Some(num) = extract_number(&lower)
+        {
+            if lower.contains("approve") {
+                return CommandIntent::Pr(format!("approve pull request #{}", num));
+            } else if lower.contains("reject") {
+                return CommandIntent::Pr(format!("reject pull request #{}", num));
             }
-        }
-        if lower.contains("comment") {
-            if let Some(num) = extract_number(&lower) {
-                let comment_body =
-                    extract_after_keywords(&lower, &["comment on pr", "comment pr", "pr comment"]);
-                if !comment_body.is_empty() {
-                    return CommandIntent::Pr(format!(
-                        "comment on github pr #{} with body: {}",
-                        num, comment_body
-                    ));
-                }
-                return CommandIntent::Pr(format!("comment on github pr #{}", num));
-            }
-        }
-        if lower.contains("review") || lower.contains("approve") || lower.contains("reject") {
-            if let Some(num) = extract_number(&lower) {
-                if lower.contains("approve") {
-                    return CommandIntent::Pr(format!("approve pull request #{}", num));
-                } else if lower.contains("reject") {
-                    return CommandIntent::Pr(format!("reject pull request #{}", num));
-                }
-                return CommandIntent::Pr(format!("review pull request #{}", num));
-            }
+            return CommandIntent::Pr(format!("review pull request #{}", num));
         }
     }
 
@@ -1528,10 +1529,11 @@ fn extract_number(text: &str) -> Option<u32> {
     // look for standalone numbers
     let words: Vec<&str> = text.split_whitespace().collect();
     for word in words {
-        if let Ok(num) = word.parse::<u32>() {
-            if num > 0 && num < 100000 {
-                return Some(num);
-            }
+        if let Ok(num) = word.parse::<u32>()
+            && num > 0
+            && num < 100000
+        {
+            return Some(num);
         }
     }
     None

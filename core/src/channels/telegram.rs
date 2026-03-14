@@ -229,7 +229,6 @@ impl TelegramChannel {
             MediaType::Document => String::new(),
         }
     }
-
 }
 
 /// Media information from Telegram

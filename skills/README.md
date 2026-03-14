@@ -9,6 +9,7 @@ This directory contains the builtin skills for mofaclaw. These skills are automa
 - **summarize** - Summarize or extract text/transcripts from URLs, podcasts, and local files
 - **tmux** - Remote-control tmux sessions for interactive CLIs
 - **skill-creator** - Meta-skill for creating new skills
+- **multi-agent** - Run a multi-agent team for code review, architecture review, or general team tasks
 
 ## Skill Structure
 

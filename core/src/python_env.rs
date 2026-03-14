@@ -158,7 +158,7 @@ impl PythonEnv {
         let args = ["-m", "pip", "install", "--user", "--upgrade", package];
 
         let output = Command::new(&self.python_cmd)
-            .args(&args)
+            .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()

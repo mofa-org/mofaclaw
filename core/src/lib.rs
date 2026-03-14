@@ -42,4 +42,5 @@ pub use session::{
     session_messages_to_messages,
 };
 pub use tools::ToolRegistry;
+pub use tools::{PermissionAwareRegistry, ToolPermissionRequirement, default_tool_permissions};
 pub use types::*;

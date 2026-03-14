@@ -9,11 +9,14 @@ use crate::agent::SubagentManager;
 use crate::bus::MessageBus;
 use crate::error::Result;
 use crate::messages::{InboundMessage, OutboundMessage};
+use crate::rbac::{AuditLogger, RbacManager};
 use crate::session::{SessionExt, SessionManager};
 use crate::tools::filesystem::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 use crate::tools::shell::ExecTool;
 use crate::tools::web::{WebFetchTool, WebSearchTool};
-use crate::tools::{MessageTool, SpawnTool, ToolRegistry, ToolRegistryExecutor};
+use crate::tools::{
+    MessageTool, PermissionAwareRegistry, SpawnTool, ToolRegistry, ToolRegistryExecutor,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info};
@@ -69,6 +72,10 @@ pub struct AgentLoop {
     temperature: Option<f32>,
     /// Max tokens
     max_tokens: Option<u32>,
+    /// RBAC manager for permission-based tool execution
+    rbac_manager: Option<Arc<RbacManager>>,
+    /// Audit logger for permission checks
+    audit_logger: Option<Arc<AuditLogger>>,
 }
 
 impl AgentLoop {
@@ -112,6 +119,8 @@ impl AgentLoop {
             default_model,
             temperature,
             max_tokens,
+            rbac_manager: None,
+            audit_logger: None,
         })
     }
 
@@ -149,7 +158,22 @@ impl AgentLoop {
             default_model,
             temperature,
             max_tokens,
+            rbac_manager: None,
+            audit_logger: None,
         })
+    }
+
+    /// Set the RBAC manager and audit logger for permission-based tool execution.
+    ///
+    /// When set, tool executions are checked against RBAC policies before
+    /// being forwarded to the underlying tool registry.
+    pub fn set_rbac(
+        &mut self,
+        rbac_manager: Arc<RbacManager>,
+        audit_logger: Option<Arc<AuditLogger>>,
+    ) {
+        self.rbac_manager = Some(rbac_manager);
+        self.audit_logger = audit_logger;
     }
 
     /// Register the default set of tools (without spawn tool)
@@ -300,15 +324,34 @@ impl AgentLoop {
             .map(|content| OutboundMessage::new(&response_channel, &response_chat_id, content)))
     }
 
-    /// Run the main agent loop using mofa framework's built-in AgentLoop
+    /// Run the main agent loop using mofa framework's built-in AgentLoop.
+    ///
+    /// When an `RbacManager` has been set via `set_rbac`, tool calls are
+    /// routed through a `PermissionAwareRegistry` that enforces RBAC
+    /// policies before execution.  Otherwise the raw `ToolRegistryExecutor`
+    /// is used (backwards-compatible).
     async fn run_agent_loop(
         &self,
         context: Vec<ChatMessage>,
         content: &str,
         media: Option<Vec<String>>,
     ) -> Result<Option<String>> {
-        let tool_executor = Arc::new(ToolRegistryExecutor::new(self.tools.clone()))
-            as Arc<dyn mofa_sdk::llm::ToolExecutor>;
+        let tool_executor: Arc<dyn mofa_sdk::llm::ToolExecutor> =
+            if let Some(ref rbac) = self.rbac_manager {
+                // Use the default role for system-originated requests;
+                // channel-specific requests should set per-request roles
+                // via a dedicated code path in the future.
+                let user_role = rbac.get_role_from_discord("system", &[]);
+                Arc::new(PermissionAwareRegistry::new(
+                    self.tools.clone(),
+                    Some(rbac.clone()),
+                    self.audit_logger.clone(),
+                    user_role,
+                    "system".to_string(),
+                ))
+            } else {
+                Arc::new(ToolRegistryExecutor::new(self.tools.clone()))
+            };
 
         let config = MofaAgentLoopConfig {
             max_tool_iterations: self.max_iterations,

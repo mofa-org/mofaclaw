@@ -127,9 +127,28 @@ impl AgentLoop {
         sessions: Arc<SessionManager>,
         tools: Arc<RwLock<ToolRegistry>>,
     ) -> Result<Self> {
-        let max_iterations = config.agents.defaults.max_tool_iterations;
+        Self::with_agent_and_tools_custom(config, agent, provider, bus, sessions, tools, None, None)
+            .await
+    }
+
+    /// Create a new agent loop with custom max_iterations and temperature
+    ///
+    /// This allows role-specific configuration of agent behavior.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn with_agent_and_tools_custom(
+        config: &Config,
+        agent: Arc<LLMAgent>,
+        provider: Arc<dyn mofa_sdk::llm::LLMProvider>,
+        bus: MessageBus,
+        sessions: Arc<SessionManager>,
+        tools: Arc<RwLock<ToolRegistry>>,
+        max_iterations_override: Option<usize>,
+        temperature_override: Option<f32>,
+    ) -> Result<Self> {
+        let max_iterations =
+            max_iterations_override.unwrap_or(config.agents.defaults.max_tool_iterations);
         let default_model = config.agents.defaults.model.clone();
-        let temperature = Some(config.agents.defaults.temperature as f32);
+        let temperature = temperature_override.or(Some(config.agents.defaults.temperature as f32));
         let max_tokens = Some(config.agents.defaults.max_tokens as u32);
         let context = ContextBuilder::new(config);
 
@@ -292,7 +311,7 @@ impl AgentLoop {
         );
         if let Err(e) = self.sessions.save(&session_updated).await {
             error!("Failed to save session {}: {}", session_key, e);
-            return Err(e.into());
+            return Err(e);
         }
         info!("Session {} saved successfully", session_key);
 
@@ -460,7 +479,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         );
 
         let msg = InboundMessage::system(
-            &format!("subagent_{}", uuid::Uuid::new_v4()),
+            format!("subagent_{}", uuid::Uuid::new_v4()),
             origin_channel,
             origin_chat_id,
             &announce_content,
@@ -481,7 +500,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
                 ActiveSubagent {
                     id: t.id,
                     prompt: t.prompt,
-                    origin_channel: parts.get(0).unwrap_or(&"").to_string(),
+                    origin_channel: parts.first().unwrap_or(&"").to_string(),
                     origin_chat_id: parts.get(1).unwrap_or(&"").to_string(),
                     started_at: t.started_at,
                 }

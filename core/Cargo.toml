@@ -49,3 +49,11 @@ mofa-sdk = "0.1.0"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[[example]]
+name = "multi_agent_team"
+path = "../examples/multi_agent_team_example.rs"
+
+[[example]]
+name = "multi_agent_workflow"
+path = "../examples/multi_agent_workflow_example.rs"

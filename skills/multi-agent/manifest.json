@@ -1,0 +1,27 @@
+{
+  "name": "multi-agent",
+  "version": "1.0.0",
+  "author": "mofaclaw",
+  "permissions": {
+    "tools": [
+      "create_team",
+      "list_teams",
+      "get_team_status",
+      "start_workflow",
+      "get_workflow_status",
+      "list_workflows",
+      "create_artifact",
+      "get_artifact",
+      "list_artifacts",
+      "send_agent_message",
+      "broadcast_to_team",
+      "respond_to_approval"
+    ],
+    "env": []
+  },
+  "dependencies": {
+    "bins": [],
+    "npm": [],
+    "pip": []
+  }
+}

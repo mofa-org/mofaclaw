@@ -1,0 +1,72 @@
+{
+  "team_configurations": [
+    {
+      "team_id": "code-review-team",
+      "team_name": "Code Review Team",
+      "roles": [
+        {
+          "role": "architect",
+          "instance_id": "arch-1"
+        },
+        {
+          "role": "developer",
+          "instance_id": "dev-1"
+        },
+        {
+          "role": "reviewer",
+          "instance_id": "rev-1"
+        },
+        {
+          "role": "tester",
+          "instance_id": "test-1"
+        }
+      ]
+    },
+    {
+      "team_id": "design-team",
+      "team_name": "Design Team",
+      "roles": [
+        {
+          "role": "architect",
+          "instance_id": "arch-main"
+        },
+        {
+          "role": "developer",
+          "instance_id": "dev-1"
+        },
+        {
+          "role": "developer",
+          "instance_id": "dev-2"
+        }
+      ]
+    }
+  ],
+  "workflow_configurations": [
+    {
+      "workflow_id": "code-review",
+      "workflow_name": "Code Review Process",
+      "steps": [
+        {
+          "step_id": "implement",
+          "name": "Implement Feature",
+          "role": "developer",
+          "task_prompt": "Implement the requested feature according to specifications."
+        },
+        {
+          "step_id": "review",
+          "name": "Code Review",
+          "role": "reviewer",
+          "task_prompt": "Review the implementation for code quality, bugs, and best practices",
+          "approval_required": true,
+          "approver_role": "architect"
+        },
+        {
+          "step_id": "test",
+          "name": "Write Tests",
+          "role": "tester",
+          "task_prompt": "Write comprehensive unit and integration tests for the implemented feature."
+        }
+      ]
+    }
+  ]
+}

@@ -143,26 +143,25 @@ impl SessionManager {
         let mut sessions = Vec::new();
         for key in keys {
             let path = self.get_session_path(&key);
-            if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                if let Some(first_line) = content.lines().next() {
-                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(first_line) {
-                        let info = SessionInfo {
-                            key: key.clone(),
-                            created_at: data
-                                .get("created_at")
-                                .and_then(|v| v.as_str())
-                                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                                .map(|dt| dt.with_timezone(&Utc)),
-                            updated_at: data
-                                .get("updated_at")
-                                .and_then(|v| v.as_str())
-                                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                                .map(|dt| dt.with_timezone(&Utc)),
-                            path: path.clone(),
-                        };
-                        sessions.push(info);
-                    }
-                }
+            if let Ok(content) = tokio::fs::read_to_string(&path).await
+                && let Some(first_line) = content.lines().next()
+                && let Ok(data) = serde_json::from_str::<serde_json::Value>(first_line)
+            {
+                let info = SessionInfo {
+                    key: key.clone(),
+                    created_at: data
+                        .get("created_at")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    updated_at: data
+                        .get("updated_at")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                    path: path.clone(),
+                };
+                sessions.push(info);
             }
         }
 

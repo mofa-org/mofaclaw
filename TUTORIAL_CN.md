@@ -456,17 +456,18 @@ pub enum MofaclawError {
 mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以为 AI 的能力提供沙箱环境。这能够在 AI 使用执行 Shell 命令或访问文件系统等工具时，保护您的系统免受意外损坏或恶意提示词注入的攻击。
 
 ### 角色 (Roles)
-代理的权限由 `config.json` 中 `rbac.default_role` 指定的默认角色，以及各渠道通过 `rbac.role_mappings` / `user_overrides` 解析得到的实际角色共同决定。
-- **Guest (访客)**: 权限严格受限。仅对特定文件夹拥有只读访问权限。无法执行 Shell 命令。
-- **Member (成员)** (默认): 标准权限。可以读写工作区，并能运行安全的已列入白名单的命令。
+代理的最终权限**完全由配置决定**：包括 `config.json` 中 `rbac.default_role` 指定的默认角色（当前实现的内置默认值为 `"guest"`），以及各渠道通过 `rbac.role_mappings.<channel>.user_overrides`（例如 `rbac.role_mappings.discord.user_overrides`）解析得到的实际角色。
+- **Guest (访客)**: 权限严格受限。通常仅对特定文件夹拥有只读访问权限。是否可以执行 Shell 命令等高危操作，取决于 `rbac.permissions.tools.shell` 下各操作的 `min_role` / `path_whitelist` 等配置，而不是角色“天生”禁止。
+- **Member (成员)**: 标准权限。可以读写工作区，并能运行配置中允许、已列入白名单的命令。常用于日常开发或受信任的团队成员，如需将默认角色设为 Member，应显式在 `rbac.default_role` 中配置。
 - **Admin (管理员)**: 拥有管理系统的扩展权限。
-- **SuperAdmin (超级管理员)**: 无限制访问权限（绕过所有沙箱限制）。
+- **SuperAdmin (超级管理员)**: 最高权限角色。可访问所有已在 RBAC 中授权的工具与路径；但如果启用了文件系统沙箱，仍需在相应的 `path_whitelist` / `path_blacklist` 中显式为 `superadmin` 配置规则，否则访问也会被拒绝。
 
 ### 🛡️ Shell 命令沙箱 (命令白名单)
 当启用 RBAC 且配置了 `shell.safe_commands` 操作时，AI 只允许执行匹配白名单的命令；未列入白名单的命令（包括类似 `rm -rf /` 或 `sudo` 的危险命令）将被阻止。如果在启用 RBAC 的情况下未配置 `shell.safe_commands`，则默认允许命令执行；而当禁用 RBAC 时，系统将使用旧版的 `is_dangerous_command` 进行检查。您可以使用 `safe_commands` 白名单来配置精确的允许命令或模式。
 
 ```json
 "rbac": {
+  "enabled": true,
   "permissions": {
     "tools": {
       "shell": {

@@ -456,17 +456,18 @@ When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's
 mofaclaw includes a powerful Role-Based Access Control (RBAC) system that sandboxes the AI's capabilities. This protects your system from accidental damage or malicious prompt injections when using tools like shell execution or file system access.
 
 ### Roles
-The agent's permissions are determined by your RBAC configuration: the global default comes from `rbac.default_role`, and individual channels can override it via `rbac.role_mappings` and `rbac.user_overrides` in `config.json`.
-- **Guest**: Highly restricted. Read-only access to specific folders. No shell commands.
-- **Member** (Default): Standard access. Can read/write to the workspace and run safe commands.
+The agent's permissions are determined by your RBAC configuration: the global default comes from `rbac.default_role`, and individual channels can override it via their entries under `rbac.role_mappings` in `config.json` (for example, `rbac.role_mappings.discord.user_overrides` for per-user overrides on Discord). The roles below describe **typical recommended configurations**; the actual behavior depends on your `rbac.permissions.*` settings (for example, shell access via `rbac.permissions.tools.shell.safe_commands.min_role`).
+- **Guest**: Highly restricted. Typically configured with read-only access to specific folders and no shell command permissions, unless `rbac.permissions.tools.shell.safe_commands.min_role` is set to allow it.
+- **Member**: Standard access. Often configured as the default role. Can usually read/write to the workspace and run safe commands, depending on your RBAC permission settings.
 - **Admin**: Extended access for managing the system.
-- **SuperAdmin**: Unlimited access (Bypasses all sandboxing).
+- **SuperAdmin**: Highest-privilege role. Bypasses shell command sandboxing, but is still subject to filesystem path whitelist/blacklist rules unless explicitly allowed there.
 
 ### 🛡️ Shell Command Sandbox (Command Whitelisting)
 When RBAC is enabled and a `shell.safe_commands` operation is configured, the AI may only run commands that match the configured whitelist; non-whitelisted commands (including dangerous ones like `rm -rf /` or `sudo`) are blocked. If RBAC is enabled but `shell.safe_commands` is not configured, commands are currently allowed by default, and when RBAC is disabled a legacy `is_dangerous_command` check is used instead. You can configure exact commands or patterns using the `safe_commands` whitelist.
 
 ```json
 "rbac": {
+  "enabled": true,
   "permissions": {
     "tools": {
       "shell": {

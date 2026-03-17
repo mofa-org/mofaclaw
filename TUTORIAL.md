@@ -416,6 +416,39 @@ Each variant carries context. For example, `ToolError::ExecutionFailed` includes
 ---
 
 ## The Workspace
+
+When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's working environment:
+
+```
+~/.mofaclaw/
+├── config.json                 # Main configuration
+├── workspace/                  # Agent workspace
+│   ├── AGENTS.md              # Agent instructions & guidelines
+│   ├── SOUL.md                # Personality & values definition
+│   ├── USER.md                # User profile & preferences
+│   ├── TOOLS.md               # Tool documentation for the agent
+│   ├── IDENTITY.md            # Agent identity
+│   ├── HEARTBEAT.md           # Periodic tasks (checked every 30 min)
+│   ├── memory/
+│   │   └── MEMORY.md          # Long-term facts & preferences
+│   ├── skills/                # User-created skills
+│   └── cron_jobs.json         # Scheduled task definitions
+├── sessions/                  # Conversation history (JSONL files)
+│   ├── cli_default.jsonl
+│   ├── telegram_12345.jsonl
+│   └── ...
+└── media/                     # Downloaded images/files from channels
+```
+
+**Bootstrap files** are loaded into the system prompt every time the agent processes a message. You can customize these to change the agent's behavior:
+
+- **`AGENTS.md`** — Instructions like "Be concise", "Ask for clarification when ambiguous", "Use tools to help accomplish tasks"
+- **`SOUL.md`** — Personality: "I am mofaclaw, a personal AI assistant. Helpful, concise, curious."
+- **`USER.md`** — User profile: name, timezone, language, preferences
+- **`TOOLS.md`** — Documents all tools from the agent's perspective (what each tool does, its parameters)
+- **`HEARTBEAT.md`** — Tasks the agent checks every 30 minutes (add checklist items here)
+- **`memory/MEMORY.md`** — Persistent facts the agent remembers across sessions
+
 ---
 
 ## Security & Access Control (RBAC)
@@ -451,41 +484,6 @@ When RBAC is enabled and a `shell.safe_commands` operation is configured, the AI
   }
 }
 ```
-
----
-
-
-When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's working environment:
-
-```
-~/.mofaclaw/
-├── config.json                 # Main configuration
-├── workspace/                  # Agent workspace
-│   ├── AGENTS.md              # Agent instructions & guidelines
-│   ├── SOUL.md                # Personality & values definition
-│   ├── USER.md                # User profile & preferences
-│   ├── TOOLS.md               # Tool documentation for the agent
-│   ├── IDENTITY.md            # Agent identity
-│   ├── HEARTBEAT.md           # Periodic tasks (checked every 30 min)
-│   ├── memory/
-│   │   └── MEMORY.md          # Long-term facts & preferences
-│   ├── skills/                # User-created skills
-│   └── cron_jobs.json         # Scheduled task definitions
-├── sessions/                  # Conversation history (JSONL files)
-│   ├── cli_default.jsonl
-│   ├── telegram_12345.jsonl
-│   └── ...
-└── media/                     # Downloaded images/files from channels
-```
-
-**Bootstrap files** are loaded into the system prompt every time the agent processes a message. You can customize these to change the agent's behavior:
-
-- **`AGENTS.md`** — Instructions like "Be concise", "Ask for clarification when ambiguous", "Use tools to help accomplish tasks"
-- **`SOUL.md`** — Personality: "I am mofaclaw, a personal AI assistant. Helpful, concise, curious."
-- **`USER.md`** — User profile: name, timezone, language, preferences
-- **`TOOLS.md`** — Documents all tools from the agent's perspective (what each tool does, its parameters)
-- **`HEARTBEAT.md`** — Tasks the agent checks every 30 minutes (add checklist items here)
-- **`memory/MEMORY.md`** — Persistent facts the agent remembers across sessions
 
 ---
 

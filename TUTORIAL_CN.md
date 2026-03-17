@@ -416,6 +416,39 @@ pub enum MofaclawError {
 ---
 
 ## 工作区
+
+运行 `mofaclaw onboard` 后，会创建一个作为代理工作环境的工作区：
+
+```
+~/.mofaclaw/
+├── config.json                 # 主配置文件
+├── workspace/                  # 代理工作区
+│   ├── AGENTS.md              # 代理指令和准则
+│   ├── SOUL.md                # 性格和价值观定义
+│   ├── USER.md                # 用户画像和偏好
+│   ├── TOOLS.md               # 面向代理的工具文档
+│   ├── IDENTITY.md            # 代理身份信息
+│   ├── HEARTBEAT.md           # 周期性任务（每 30 分钟检查）
+│   ├── memory/
+│   │   └── MEMORY.md          # 长期事实和偏好
+│   ├── skills/                # 用户创建的技能
+│   └── cron_jobs.json         # 定时任务定义
+├── sessions/                  # 对话历史（JSONL 文件）
+│   ├── cli_default.jsonl
+│   ├── telegram_12345.jsonl
+│   └── ...
+└── media/                     # 从频道下载的图片/文件
+```
+
+**引导文件**在代理每次处理消息时都会加载到系统提示词中。你可以自定义这些文件来改变代理的行为：
+
+- **`AGENTS.md`** — 指令如"简洁回答"、"不明确时请求澄清"、"使用工具完成任务"
+- **`SOUL.md`** — 性格："我是 mofaclaw，一个个人 AI 助手。乐于助人、简洁、好奇。"
+- **`USER.md`** — 用户画像：姓名、时区、语言、偏好
+- **`TOOLS.md`** — 从代理角度记录所有工具（每个工具的功能、参数）
+- **`HEARTBEAT.md`** — 代理每 30 分钟检查的任务（在此添加任务清单）
+- **`memory/MEMORY.md`** — 代理跨会话记住的持久化事实
+
 ---
 
 ## 安全与访问控制 (RBAC)
@@ -451,41 +484,6 @@ mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以
   }
 }
 ```
-
----
-
-
-运行 `mofaclaw onboard` 后，会创建一个作为代理工作环境的工作区：
-
-```
-~/.mofaclaw/
-├── config.json                 # 主配置文件
-├── workspace/                  # 代理工作区
-│   ├── AGENTS.md              # 代理指令和准则
-│   ├── SOUL.md                # 性格和价值观定义
-│   ├── USER.md                # 用户画像和偏好
-│   ├── TOOLS.md               # 面向代理的工具文档
-│   ├── IDENTITY.md            # 代理身份信息
-│   ├── HEARTBEAT.md           # 周期性任务（每 30 分钟检查）
-│   ├── memory/
-│   │   └── MEMORY.md          # 长期事实和偏好
-│   ├── skills/                # 用户创建的技能
-│   └── cron_jobs.json         # 定时任务定义
-├── sessions/                  # 对话历史（JSONL 文件）
-│   ├── cli_default.jsonl
-│   ├── telegram_12345.jsonl
-│   └── ...
-└── media/                     # 从频道下载的图片/文件
-```
-
-**引导文件**在代理每次处理消息时都会加载到系统提示词中。你可以自定义这些文件来改变代理的行为：
-
-- **`AGENTS.md`** — 指令如"简洁回答"、"不明确时请求澄清"、"使用工具完成任务"
-- **`SOUL.md`** — 性格："我是 mofaclaw，一个个人 AI 助手。乐于助人、简洁、好奇。"
-- **`USER.md`** — 用户画像：姓名、时区、语言、偏好
-- **`TOOLS.md`** — 从代理角度记录所有工具（每个工具的功能、参数）
-- **`HEARTBEAT.md`** — 代理每 30 分钟检查的任务（在此添加任务清单）
-- **`memory/MEMORY.md`** — 代理跨会话记住的持久化事实
 
 ---
 

@@ -93,7 +93,8 @@ impl SessionManager {
 
     /// Get an existing session or create a new one (delegates to mofa)
     pub async fn get_or_create(&self, key: impl Into<String>) -> Session {
-        self.inner.get_or_create(&key.into()).await
+        let key = key.into();
+        self.inner.get_or_create(&storage_key(&key)).await
     }
 
     /// Load a session from disk
@@ -127,7 +128,7 @@ impl SessionManager {
     /// Delete a session (delegates to mofa)
     pub async fn delete(&self, key: &str) -> Result<bool> {
         self.inner
-            .delete(key)
+            .delete(&storage_key(key))
             .await
             .map_err(|e| crate::error::SessionError::LoadFailed(e.to_string()).into())
     }
@@ -177,8 +178,7 @@ impl SessionManager {
 
     /// Get the file path for a session
     fn get_session_path(&self, key: &str) -> PathBuf {
-        let safe_key = safe_filename(&key.replace(':', "_"));
-        self.sessions_dir.join(format!("{}.jsonl", safe_key))
+        self.sessions_dir.join(format!("{}.jsonl", storage_key(key)))
     }
 
     /// Get the inner mofa SessionManager (for advanced usage)
@@ -198,6 +198,10 @@ fn safe_filename(name: &str) -> String {
             }
         })
         .collect()
+}
+
+fn storage_key(key: &str) -> String {
+    safe_filename(&key.replace(':', "_"))
 }
 
 // ============================================================================
@@ -306,6 +310,12 @@ mod tests {
     }
 
     #[test]
+    fn test_storage_key_replaces_windows_unsafe_separators() {
+        assert_eq!(storage_key("cli:default"), "cli_default");
+        assert_eq!(storage_key("discord:general/chat"), "discord_general_chat");
+    }
+
+    #[test]
     fn test_message_conversion() {
         // Test Message -> SessionMessage
         let msg = Message::user("Hello world");
@@ -354,13 +364,13 @@ mod tests {
         let manager = SessionManager::with_sessions_dir(temp_dir.path().to_path_buf());
 
         let session = manager.get_or_create("test:session").await;
-        assert_eq!(session.key, "test:session");
+        assert_eq!(session.key, "test_session");
 
         manager.save(&session).await.unwrap();
 
         // Reload
         let loaded = manager.get_or_create("test:session").await;
-        assert_eq!(loaded.key, "test:session");
+        assert_eq!(loaded.key, "test_session");
     }
 
     #[tokio::test]

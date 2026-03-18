@@ -19,6 +19,19 @@ Use this skill when the user asks for a data-driven repository health overview, 
 - "CI health"
 - "code change statistics"
 
+---
+## Example Commands to Document
+
+# Generate full report for last 30 days
+gh api repos/owner/repo/stats/participation
+gh pr list --state all --limit 100 --json number,state,createdAt,mergedAt
+gh issue list --state all --limit 100 --json number,state,createdAt,closedAt
+gh run list --limit 50 --json status,conclusion
+
+# Commit statistics
+git shortlog -sn --since="30 days ago"
+git log --since="30 days ago" --pretty=format: --name-only | sort | uniq -c | sort -rg | head -20
+
 ## Execution Strategy
 
 **Preferred approach:** run the bundled generator script directly via the `exec` tool (do not try to re-implement the report by manually running each section).
@@ -245,6 +258,23 @@ jq -n \
   --rawfile markdown repo-report-$(date +%Y-%m-%d).md \
   '{format:"repo-report", repo:$repo, generated_at:$generated_at, report_markdown:$markdown}'
 ```
+
+---
+## Optional Gaps / Notes
+
+Caching:
+- The generator uses a simple on-disk cache for `gh pr list`, `gh issue list`, and `gh run list` results to avoid repeated calls on large repos.
+- Configure via:
+  - `REPO_REPORT_CACHE_ENABLED=1|0`
+  - `REPO_REPORT_CACHE_TTL_SECONDS` (default `600`)
+  - `REPO_REPORT_CACHE_DIR` (default `~/.mofaclaw/cache/repo-report`)
+
+Hard pagination limits:
+- The generator requests up to `1000` PRs/issues/runs via `gh` and then filters by the computed `$DAYS` window.
+- If a repo has more than that in the time window, results may still be incomplete (this is a limitation of API/CLI pagination caps).
+
+Participation API:
+- The docs include `gh api repos/owner/repo/stats/participation` as a reference, but the actual daily/weekly/monthly commit frequency tables are computed from `git log` for better granularity.
 
 ## Reference Files
 

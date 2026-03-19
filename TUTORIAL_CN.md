@@ -451,6 +451,49 @@ pub enum MofaclawError {
 
 ---
 
+## 安全与访问控制 (RBAC)
+
+mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以为 AI 的能力提供沙箱环境。这能够在 AI 使用执行 Shell 命令或访问文件系统等工具时，保护您的系统免受意外损坏或恶意提示词注入的攻击。
+
+### 角色 (Roles)
+代理的最终权限**完全由配置决定**：包括 `config.json` 中 `rbac.default_role` 指定的默认角色（当前实现的内置默认值为 `"guest"`），以及各渠道通过 `rbac.role_mappings.<channel>.user_overrides`（例如 `rbac.role_mappings.discord.user_overrides`）解析得到的实际角色。
+- **Guest (访客)**: 权限严格受限。通常仅对特定文件夹拥有只读访问权限。是否可以执行 Shell 命令等高危操作，取决于 `rbac.permissions.tools.shell` 下各操作的 `min_role` / `path_whitelist` 等配置，而不是角色“天生”禁止。
+- **Member (成员)**: 标准权限。可以读写工作区，并能运行配置中允许、已列入白名单的命令。常用于日常开发或受信任的团队成员，如需将默认角色设为 Member，应显式在 `rbac.default_role` 中配置。
+- **Admin (管理员)**: 拥有管理系统的扩展权限。
+- **SuperAdmin (超级管理员)**: 最高权限角色。可访问所有已在 RBAC 中授权的工具与路径；但如果启用了文件系统沙箱，仍需在相应的 `path_whitelist` / `path_blacklist` 中显式为 `superadmin` 配置规则，否则访问也会被拒绝。
+
+### 🛡️ 文件系统沙箱 (路径白名单)
+当配置文件系统权限时，mofaclaw 会限制 AI 可以读写哪些路径。在这种情况下，所有角色（包括 SuperAdmin）都只允许访问与其角色匹配的 `path_whitelist`（路径白名单）中的路径；如果未配置相关权限，则文件系统访问不受 RBAC 限制。若希望 SuperAdmin 在文件系统上拥有几乎无限制的访问能力，应在相应权限项下为 `superadmin` 配置足够宽泛的路径模式（例如 `"${workspace}/**"`、`"${home}/**"` 等），而不是假定其会自动绕过沙箱。
+
+`config.json` 中的配置示例：
+```json
+"rbac": {
+  "enabled": true,
+  "permissions": {
+    "tools": {
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+*类似 `${workspace}` 和 `${home}` 的变量会被自动解析。*
+
+---
+
 ## 实战：添加一个 Skill
 
 技能是**扩展 mofaclaw 最简单的方式** — 它们只是 Markdown 文件，不需要写 Rust 代码！

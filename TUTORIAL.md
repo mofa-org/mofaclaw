@@ -451,6 +451,50 @@ When you run `mofaclaw onboard`, it creates a workspace that acts as the agent's
 
 ---
 
+## Security & Access Control (RBAC)
+
+mofaclaw includes a powerful Role-Based Access Control (RBAC) system that sandboxes the AI's capabilities. This protects your system from accidental damage or malicious prompt injections when using tools like shell execution or file system access.
+
+### Roles
+The agent's permissions are determined by your RBAC configuration: the global default comes from `rbac.default_role`, and individual channels can override it via their entries under `rbac.role_mappings` in `config.json` (for example, `rbac.role_mappings.discord.user_overrides` for per-user overrides on Discord). The roles below describe **typical recommended configurations**; the actual behavior depends on your `rbac.permissions.*` settings (for example, shell access via `rbac.permissions.tools.shell.safe_commands.min_role`).
+- **Guest**: Highly restricted. Typically configured with read-only access to specific folders and no shell command permissions, unless `rbac.permissions.tools.shell.safe_commands.min_role` is set to allow it.
+- **Member**: Standard access. Often configured as the default role. Can usually read/write to the workspace and run safe commands, depending on your RBAC permission settings.
+- **Admin**: Extended access for managing the system.
+- **SuperAdmin**: Highest-privilege role. Bypasses shell command sandboxing, but is still subject to filesystem path whitelist/blacklist rules unless explicitly allowed there.
+
+### 🛡️ Filesystem Sandbox (Path Whitelisting)
+When RBAC filesystem permissions are configured, mofaclaw can restrict which paths the AI may read or write.
+In that case, for all roles (including `superadmin`), access is allowed only for paths matching the role's configured `path_whitelist`; if no such permissions are defined, filesystem access is not restricted by RBAC.
+
+Example configuration in `config.json`:
+```json
+"rbac": {
+  "enabled": true,
+  "permissions": {
+    "tools": {
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+*Variables like `${workspace}` and `${home}` are automatically resolved.*
+
+---
+
 ## Hands-on: Add a Skill
 
 Skills are the **easiest way to extend mofaclaw** — they're just markdown files. No Rust code needed!

@@ -50,8 +50,6 @@ pub struct UserUsage {
     pub last_reset: Instant,
 }
 
-
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct UserId(pub String);
 
@@ -148,11 +146,12 @@ impl ResourceLimiter {
         role: Option<&Role>,
         operation: &Operation,
     ) -> Result<(), RateLimitError> {
-        let mut user_usage_lock = self.usage.user_usage.lock()
+        let mut user_usage_lock = self
+            .usage
+            .user_usage
+            .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let usage = user_usage_lock
-            .entry(user.clone())
-            .or_default();
+        let usage = user_usage_lock.entry(user.clone()).or_default();
         usage.reset_if_minute_elapsed();
 
         let limits = role
@@ -172,7 +171,7 @@ impl ResourceLimiter {
                     });
                 }
             }
-            Operation::FileOp => {
+            Operation::FileOp | Operation::FileRead => {
                 let limit = limits
                     .and_then(|l| l.file_ops_per_minute)
                     .unwrap_or(self.limits.max_file_ops_per_minute);
@@ -192,22 +191,37 @@ impl ResourceLimiter {
             }
             _ => {}
         }
+
+        if let Some(existing) = user_usage_lock.get(user) {
+            let idle_for = existing.last_reset.elapsed();
+            if idle_for >= Duration::from_secs(300)
+                && existing.commands_this_minute == 0
+                && existing.file_ops_this_minute == 0
+                && existing.web_requests_this_minute == 0
+                && existing.active_commands == 0
+                && existing.active_subagents == 0
+            {
+                user_usage_lock.remove(user);
+            }
+        }
+
         Ok(())
     }
 
     pub fn increment_usage(&self, user: &UserId, operation: &Operation) {
-        let mut user_usage_lock = self.usage.user_usage.lock()
+        let mut user_usage_lock = self
+            .usage
+            .user_usage
+            .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let usage = user_usage_lock
-            .entry(user.clone())
-            .or_default();
+        let usage = user_usage_lock.entry(user.clone()).or_default();
 
         match operation {
             Operation::Command => {
                 usage.commands_this_minute += 1;
                 tracing::debug!(user_id = %user.0, op = "Command", count = usage.commands_this_minute, "Usage incremented");
             }
-            Operation::FileOp => {
+            Operation::FileOp | Operation::FileRead => {
                 usage.file_ops_this_minute += 1;
                 tracing::debug!(user_id = %user.0, op = "FileOp", count = usage.file_ops_this_minute, "Usage incremented");
             }
@@ -228,7 +242,20 @@ impl ResourceLimiter {
         if output.len() <= max_size {
             Cow::Borrowed(output)
         } else {
-            let truncated = &output[..max_size];
+            let mut end = max_size.min(output.len());
+            loop {
+                match std::str::from_utf8(&output[..end]) {
+                    Ok(_) => break,
+                    Err(e) => {
+                        let valid_up_to = e.valid_up_to();
+                        if valid_up_to == 0 || valid_up_to >= end {
+                            break;
+                        }
+                        end = valid_up_to;
+                    }
+                }
+            }
+            let truncated = &output[..end];
             let message = format!("\n\n[TRUNCATED: Output exceeded {} bytes]", max_size);
             Cow::Owned([truncated, message.as_bytes()].concat())
         }
@@ -239,11 +266,12 @@ impl ResourceLimiter {
         role: Option<&Role>,
         operation: Operation,
     ) -> Result<ResourceSlot, ResourceError> {
-        let mut user_usage_lock = self.usage.user_usage.lock()
+        let mut user_usage_lock = self
+            .usage
+            .user_usage
+            .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let usage = user_usage_lock
-            .entry(user.clone())
-            .or_default();
+        let usage = user_usage_lock.entry(user.clone()).or_default();
 
         let limits = role
             .map(|r| r.as_str())
@@ -284,23 +312,25 @@ impl ResourceLimiter {
 
 impl Drop for ResourceSlot {
     fn drop(&mut self) {
-        if let Ok(mut lock) = self.usage_tracker.lock() {
-            if let Some(usage) = lock.get_mut(&self.user) {
-                match self.operation {
-                    Operation::Command => {
-                        if usage.active_commands > 0 {
-                            usage.active_commands -= 1;
-                            tracing::debug!(user_id = %self.user.0, active = usage.active_commands, "Released Command resource slot");
-                        }
+        let mut guard = match self.usage_tracker.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(usage) = guard.get_mut(&self.user) {
+            match self.operation {
+                Operation::Command => {
+                    if usage.active_commands > 0 {
+                        usage.active_commands -= 1;
+                        tracing::debug!(user_id = %self.user.0, active = usage.active_commands, "Released Command resource slot");
                     }
-                    Operation::SpawnSubagent => {
-                        if usage.active_subagents > 0 {
-                            usage.active_subagents -= 1;
-                            tracing::debug!(user_id = %self.user.0, active = usage.active_subagents, "Released SpawnSubagent resource slot");
-                        }
-                    }
-                    _ => {}
                 }
+                Operation::SpawnSubagent => {
+                    if usage.active_subagents > 0 {
+                        usage.active_subagents -= 1;
+                        tracing::debug!(user_id = %self.user.0, active = usage.active_subagents, "Released SpawnSubagent resource slot");
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -374,9 +404,11 @@ mod tests {
 
         // Guest user hits their limit at 2 commands
         for _ in 0..2 {
-            assert!(limiter
-                .check_rate_limit(&guest_user, Some(&guest_role), &Operation::Command)
-                .is_ok());
+            assert!(
+                limiter
+                    .check_rate_limit(&guest_user, Some(&guest_role), &Operation::Command)
+                    .is_ok()
+            );
             limiter.increment_usage(&guest_user, &Operation::Command);
         }
         assert!(matches!(
@@ -386,9 +418,11 @@ mod tests {
 
         // Admin user can do 10 commands
         for _ in 0..10 {
-            assert!(limiter
-                .check_rate_limit(&admin_user, Some(&admin_role), &Operation::Command)
-                .is_ok());
+            assert!(
+                limiter
+                    .check_rate_limit(&admin_user, Some(&admin_role), &Operation::Command)
+                    .is_ok()
+            );
             limiter.increment_usage(&admin_user, &Operation::Command);
         }
         assert!(matches!(
@@ -420,8 +454,12 @@ mod tests {
         let user = UserId("test_user".to_string());
 
         // Acquire 2 slots (limit is 2)
-        let slot1 = limiter.acquire_slot(&user, None, Operation::Command).unwrap();
-        let slot2 = limiter.acquire_slot(&user, None, Operation::Command).unwrap();
+        let slot1 = limiter
+            .acquire_slot(&user, None, Operation::Command)
+            .unwrap();
+        let slot2 = limiter
+            .acquire_slot(&user, None, Operation::Command)
+            .unwrap();
 
         // Third should fail
         assert!(matches!(
@@ -431,7 +469,11 @@ mod tests {
 
         // Drop one slot, then acquire should succeed
         drop(slot1);
-        assert!(limiter.acquire_slot(&user, None, Operation::Command).is_ok());
+        assert!(
+            limiter
+                .acquire_slot(&user, None, Operation::Command)
+                .is_ok()
+        );
 
         drop(slot2);
     }
@@ -443,7 +485,11 @@ mod tests {
 
         // Fill up file ops (limit is 5)
         for _ in 0..5 {
-            assert!(limiter.check_rate_limit(&user, None, &Operation::FileOp).is_ok());
+            assert!(
+                limiter
+                    .check_rate_limit(&user, None, &Operation::FileOp)
+                    .is_ok()
+            );
             limiter.increment_usage(&user, &Operation::FileOp);
         }
         assert!(matches!(
@@ -453,7 +499,11 @@ mod tests {
 
         // Fill up web requests (limit is 5)
         for _ in 0..5 {
-            assert!(limiter.check_rate_limit(&user, None, &Operation::WebRequest).is_ok());
+            assert!(
+                limiter
+                    .check_rate_limit(&user, None, &Operation::WebRequest)
+                    .is_ok()
+            );
             limiter.increment_usage(&user, &Operation::WebRequest);
         }
         assert!(matches!(

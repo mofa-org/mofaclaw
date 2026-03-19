@@ -215,20 +215,54 @@ impl mofa_sdk::llm::ToolExecutor for ToolRegistryExecutor {
             limiter
                 .check_rate_limit(&user, self.role.as_ref(), &op)
                 .map_err(|e| mofa_sdk::llm::LLMError::Other(e.to_string()))?;
+            let slot = limiter
+                .acquire_slot(&user, self.role.as_ref(), op.clone())
+                .map_err(|e| mofa_sdk::llm::LLMError::Other(e.to_string()))?;
             limiter.increment_usage(&user, &op);
-            Some(
-                limiter
-                    .acquire_slot(&user, self.role.as_ref(), op.clone())
-                    .map_err(|e| mofa_sdk::llm::LLMError::Other(e.to_string()))?,
-            )
+            Some(slot)
         } else {
             None
         };
 
-        let result = registry
-            .execute(name, &params)
-            .await
-            .map_err(|e| mofa_sdk::llm::LLMError::Other(format!("Tool execution failed: {}", e)))?;
+        let result = if let (Some(limiter), Some(op)) = (&self.resource_limiter, &operation) {
+            let timeout_secs = match op {
+                crate::sandbox::resource::Operation::Command => {
+                    limiter.limits.command_timeout_seconds
+                }
+                crate::sandbox::resource::Operation::FileOp
+                | crate::sandbox::resource::Operation::FileRead => {
+                    limiter.limits.file_operation_timeout_seconds
+                }
+                crate::sandbox::resource::Operation::WebRequest => {
+                    limiter.limits.web_request_timeout_seconds
+                }
+                _ => 0,
+            };
+            if timeout_secs > 0 {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_secs),
+                    registry.execute(name, &params),
+                )
+                .await
+                .map_err(|_| {
+                    mofa_sdk::llm::LLMError::Other(format!(
+                        "Tool execution timed out after {} seconds",
+                        timeout_secs
+                    ))
+                })?
+                .map_err(|e| {
+                    mofa_sdk::llm::LLMError::Other(format!("Tool execution failed: {}", e))
+                })?
+            } else {
+                registry.execute(name, &params).await.map_err(|e| {
+                    mofa_sdk::llm::LLMError::Other(format!("Tool execution failed: {}", e))
+                })?
+            }
+        } else {
+            registry.execute(name, &params).await.map_err(|e| {
+                mofa_sdk::llm::LLMError::Other(format!("Tool execution failed: {}", e))
+            })?
+        };
 
         if let (Some(limiter), Some(op)) = (&self.resource_limiter, operation) {
             let truncated = limiter.truncate_output(result.as_bytes(), &op);

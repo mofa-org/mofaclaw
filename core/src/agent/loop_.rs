@@ -109,13 +109,23 @@ impl AgentLoop {
             .and_then(|s| s.build_limiter())
             .map(Arc::new);
 
-        let rbac_manager = config.get_rbac_config().ok().flatten().map(|rc| {
-            Arc::new(crate::rbac::manager::RbacManager::new(
-                rc,
-                config.workspace_path(),
-                dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")),
-            ))
-        });
+        let rbac_manager = match config.get_rbac_config() {
+            Ok(Some(rc)) => {
+                let home_dir = dirs::home_dir()
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(crate::rbac::manager::RbacManager::new(
+                    rc,
+                    config.workspace_path(),
+                    home_dir,
+                )))
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!("RBAC configuration error: {}", e);
+                None
+            }
+        };
 
         Ok(Self {
             _agent: agent,
@@ -162,13 +172,23 @@ impl AgentLoop {
             .and_then(|s| s.build_limiter())
             .map(Arc::new);
 
-        let rbac_manager = config.get_rbac_config().ok().flatten().map(|rc| {
-            Arc::new(crate::rbac::manager::RbacManager::new(
-                rc,
-                config.workspace_path(),
-                dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/")),
-            ))
-        });
+        let rbac_manager = match config.get_rbac_config() {
+            Ok(Some(rc)) => {
+                let home_dir = dirs::home_dir()
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(crate::rbac::manager::RbacManager::new(
+                    rc,
+                    config.workspace_path(),
+                    home_dir,
+                )))
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!("RBAC configuration error: {}", e);
+                None
+            }
+        };
 
         Ok(Self {
             _agent: agent,
@@ -311,10 +331,20 @@ impl AgentLoop {
             // Real channels will pass correct roles later, but we need *some* role here matching the channel.
             // Since AgentLoop only has channel/user_id, it can't check Discord roles directly.
             // So we rely on mapping default rules or overrides.
+            let roles_val = msg.metadata.get("roles");
+            let roles: Vec<String> = if let Some(serde_json::Value::Array(arr)) = roles_val {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let roles_ref: Vec<&str> = roles.iter().map(|s| s.as_str()).collect();
+
             match response_channel.as_str() {
-                "discord" => manager.get_role_from_discord(&msg.sender_id, &[]),
-                "dingtalk" => manager.get_role_from_dingtalk(&msg.sender_id, &[]),
-                "feishu" => manager.get_role_from_feishu(&msg.sender_id, &[]),
+                "discord" => manager.get_role_from_discord(&msg.sender_id, &roles_ref),
+                "dingtalk" => manager.get_role_from_dingtalk(&msg.sender_id, &roles_ref),
+                "feishu" => manager.get_role_from_feishu(&msg.sender_id, &roles_ref),
                 _ => crate::rbac::Role::Guest,
             }
         });

@@ -14,6 +14,8 @@ use crate::tools::filesystem::{EditFileTool, ListDirTool, ReadFileTool, WriteFil
 use crate::tools::shell::ExecTool;
 use crate::tools::web::{WebFetchTool, WebSearchTool};
 use crate::tools::{MessageTool, SpawnTool, ToolRegistry, ToolRegistryExecutor};
+use crate::workspace::SharedWorkspace;
+use crate::workspace::types::{AgentId, TaskStatus};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info};
@@ -61,6 +63,8 @@ pub struct AgentLoop {
     running: Arc<RwLock<bool>>,
     /// Task orchestrator for subagent spawning
     task_orchestrator: Arc<TaskOrchestrator>,
+    /// Shared workspace for cross-agent coordination
+    workspace: Arc<SharedWorkspace>,
     /// Max tool iterations
     max_iterations: usize,
     /// Default model
@@ -81,7 +85,6 @@ impl AgentLoop {
         bus: MessageBus,
         sessions: Arc<SessionManager>,
     ) -> Result<Self> {
-        let workspace = config.workspace_path();
         let max_iterations = config.agents.defaults.max_tool_iterations;
         let default_model = config.agents.defaults.model.clone();
         let temperature = Some(config.agents.defaults.temperature as f32);
@@ -90,10 +93,12 @@ impl AgentLoop {
 
         let context = ContextBuilder::new(config);
         let tools = Arc::new(RwLock::new(ToolRegistry::new()));
+        let workspace_path = config.workspace_path();
+        let workspace = Arc::new(SharedWorkspace::open(&workspace_path).await?);
 
         // Register default tools
         let mut tools_guard = tools.write().await;
-        Self::register_default_tools(&mut tools_guard, &workspace, brave_api_key, bus.clone());
+        Self::register_default_tools(&mut tools_guard, &workspace_path, brave_api_key, bus.clone());
         drop(tools_guard);
 
         // Create mofa TaskOrchestrator for subagent spawning
@@ -108,6 +113,7 @@ impl AgentLoop {
             context,
             running: Arc::new(RwLock::new(false)),
             task_orchestrator,
+            workspace,
             max_iterations,
             default_model,
             temperature,
@@ -132,6 +138,7 @@ impl AgentLoop {
         let temperature = Some(config.agents.defaults.temperature as f32);
         let max_tokens = Some(config.agents.defaults.max_tokens as u32);
         let context = ContextBuilder::new(config);
+        let workspace = Arc::new(SharedWorkspace::open(config.workspace_path()).await?);
 
         // Create mofa TaskOrchestrator for subagent spawning
         let task_orchestrator = Arc::new(TaskOrchestrator::with_defaults(provider.clone()));
@@ -145,6 +152,7 @@ impl AgentLoop {
             context,
             running: Arc::new(RwLock::new(false)),
             task_orchestrator,
+            workspace,
             max_iterations,
             default_model,
             temperature,
@@ -389,27 +397,56 @@ impl AgentLoop {
 
         // Create task origin for routing results
         let origin = TaskOrigin::from_channel(origin_channel, origin_chat_id);
+        let workspace_agent = AgentId::from(format!("subagent:{origin_channel}:{origin_chat_id}"));
+        let task_record = self
+            .workspace
+            .add_task_with_status(
+                workspace_agent.clone(),
+                prompt.to_string(),
+                TaskStatus::InProgress,
+            )
+            .await?;
 
         // Spawn using mofa's TaskOrchestrator
         let task_id = self
             .task_orchestrator
             .spawn(prompt, origin)
             .await
-            .map_err(|e| crate::error::AgentError::ProviderError(e.to_string()))?;
+            .map_err(|e| crate::error::AgentError::ProviderError(e.to_string()));
+        let task_id = match task_id {
+            Ok(task_id) => task_id,
+            Err(err) => {
+                let _ = self
+                    .workspace
+                    .update_task_status(task_record.id, TaskStatus::Failed)
+                    .await;
+                return Err(err.into());
+            }
+        };
 
         // Subscribe to results and forward to message bus
         let mut result_rx = self.task_orchestrator.subscribe_results();
         let bus = self.bus.clone();
+        let workspace = self.workspace.clone();
         let task_id_clone = task_id.clone();
         let label_clone = display_label.clone();
         let prompt_clone = prompt.to_string();
         let origin_channel_clone = origin_channel.to_string();
         let origin_chat_id_clone = origin_chat_id.to_string();
+        let task_record_id = task_record.id;
 
         tokio::spawn(async move {
             // Wait for this task's result
             while let Ok(result) = result_rx.recv().await {
                 if result.task_id == task_id_clone {
+                    let status = if result.success {
+                        TaskStatus::Completed
+                    } else {
+                        TaskStatus::Failed
+                    };
+                    if let Err(err) = workspace.update_task_status(task_record_id, status).await {
+                        error!("Failed to update shared workspace task state: {}", err);
+                    }
                     Self::announce_subagent_result(
                         &bus,
                         &label_clone,
@@ -510,6 +547,11 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
     /// Get the tool registry
     pub fn tools(&self) -> &Arc<RwLock<ToolRegistry>> {
         &self.tools
+    }
+
+    /// Get the shared workspace instance used by the agent runtime.
+    pub fn workspace(&self) -> &Arc<SharedWorkspace> {
+        &self.workspace
     }
 }
 

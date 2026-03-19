@@ -331,3 +331,46 @@ Read the skill's SKILL.md file using the `read_file` tool to learn how to use it
         &self.skills
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::default_config;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_skills_summary_includes_pr_review() {
+        let temp = tempdir().expect("tempdir");
+        let mut config = default_config();
+        config.agents.defaults.workspace = temp.path().display().to_string();
+
+        let context = ContextBuilder::new(&config);
+        let prompt = context
+            .build_system_prompt(None)
+            .await
+            .expect("system prompt");
+
+        assert!(
+            prompt.contains("pr-review"),
+            "prompt did not include pr-review skill summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_requested_pr_review_skill_is_loaded() {
+        let temp = tempdir().expect("tempdir");
+        let mut config = default_config();
+        config.agents.defaults.workspace = temp.path().display().to_string();
+
+        let context = ContextBuilder::new(&config);
+        let requested = vec!["pr-review".to_string()];
+        let prompt = context
+            .build_system_prompt(Some(&requested))
+            .await
+            .expect("system prompt");
+
+        assert!(prompt.contains("# Requested Skills"));
+        assert!(prompt.contains("# PR Review Skill"));
+        assert!(prompt.contains("PR Template Compliance"));
+    }
+}

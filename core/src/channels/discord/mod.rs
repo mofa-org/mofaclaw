@@ -22,6 +22,8 @@ pub struct Data {
     pub bus: MessageBus,
     /// discord configuration
     pub config: DiscordConfig,
+    /// rbac manager
+    pub rbac_manager: Option<Arc<RbacManager>>,
 }
 
 /// discord channel using serenity and poise
@@ -80,6 +82,19 @@ pub enum PrReviewAction {
     Approve,
     #[name = "reject"]
     Reject,
+}
+
+/// ci/cd status action enum
+#[derive(Debug, poise::ChoiceParameter)]
+pub enum StatusAction {
+    #[name = "run_list"]
+    RunList,
+    #[name = "run_view"]
+    RunView,
+    #[name = "checks"]
+    Checks,
+    #[name = "watch"]
+    Watch,
 }
 
 impl DiscordChannel {
@@ -164,7 +179,7 @@ impl DiscordChannel {
             running: Arc::new(RwLock::new(true)),
             http: Arc::new(RwLock::new(None)),
             permissions,
-            rbac_manager: None, // Will be set if RBAC is configured
+            rbac_manager: ctx.data().rbac_manager.clone(), // Set from data setup
         }
     }
 
@@ -620,11 +635,15 @@ async fn pr(
     Ok(())
 }
 
-/// view ci status command
+/// github ci/cd status view command
 #[poise::command(slash_command)]
 async fn status(
     ctx: poise::Context<'_, Data, DiscordError>,
-    #[description = "workflow name"] workflow: Option<String>,
+    #[description = "action: run_list, run_view, checks, or watch"] action: StatusAction,
+    #[description = "run id (for run_view / watch)"] run_id: Option<String>,
+    #[description = "pr number (for checks)"] pr_number: Option<u32>,
+    #[description = "workflow name filter (for run_list)"] workflow: Option<String>,
+    #[description = "max runs (default 10, max 50)"] limit: Option<u32>,
 ) -> std::result::Result<(), DiscordError> {
     // show typing indicator
     let _ = ctx.channel_id().start_typing(&ctx.serenity_context().http);
@@ -634,18 +653,112 @@ async fn status(
     let sender_id = format!("{}|{}", user_id, username);
     let chat_id = ctx.channel_id().to_string();
 
-    let request = if let Some(w) = workflow {
-        format!("check ci status for workflow: {}", w)
-    } else {
-        "check overall ci status".to_string()
+    let roles = DiscordChannel::get_user_roles(ctx.guild_id(), ctx.http(), ctx.author().id).await;
+    let channel = DiscordChannel::from_context(&ctx);
+    let user_role = channel.resolve_user_role(&user_id, &roles);
+
+    // all status commands are read-only, require guest level
+    if let Some(ref rbac) = channel.rbac_manager {
+        match rbac.check_permission(user_role, "skills.github", "status.view") {
+            crate::rbac::manager::PermissionResult::Allowed => {}
+            crate::rbac::manager::PermissionResult::Denied(reason) => {
+                ctx.say(format!("error: {}", reason)).await?;
+                return Ok(());
+            }
+        }
+    }
+
+    let (request, embed_title) = match action {
+        StatusAction::RunList => {
+            let limit_val = limit.unwrap_or(10).min(50);
+            let mut req = format!(
+                "list recent github actions workflow runs using: gh run list --limit {}",
+                limit_val
+            );
+            if let Some(w) = workflow {
+                req.push_str(&format!(" --workflow {}", w));
+            }
+            req.push_str(
+                ". Format the output as a table with columns: STATUS, TITLE, WORKFLOW, BRANCH, RUN_ID, ELAPSED, AGE. \
+                 Use emoji for status: \u{2705} success, \u{274c} failure, \u{1f7e1} in_progress, \u{23f3} queued",
+            );
+            (req, "CI/CD Workflow Runs".to_string())
+        }
+        StatusAction::RunView => {
+            if let Some(id) = run_id {
+                let req = format!(
+                    "view github actions workflow run details using: gh run view {}. \
+                     Show the run name, status, conclusion, branch, commit, event trigger, \
+                     timing, and list each job with its status. \
+                     Use emoji for status: \u{2705} success, \u{274c} failure, \u{1f7e1} in_progress. \
+                     If the run failed, also fetch failed logs with: gh run view {} --log-failed \
+                     and include the relevant error lines",
+                    id, id
+                );
+                (req, "Workflow Run Details".to_string())
+            } else {
+                ctx.say("error: run_id is required for run_view action")
+                    .await?;
+                return Ok(());
+            }
+        }
+        StatusAction::Checks => {
+            if let Some(pr_num) = pr_number {
+                let req = format!(
+                    "view ci check status for pull request using: gh pr checks {}. \
+                     Show each check name, its status, and the URL. \
+                     Use emoji for status: \u{2705} pass, \u{274c} fail, \u{1f7e1} pending. \
+                     Summarize overall status at the end (all passing / some failing / pending)",
+                    pr_num
+                );
+                let title = format!("PR #{} CI Checks", pr_num);
+                (req, title)
+            } else {
+                ctx.say("error: pr_number is required for checks action")
+                    .await?;
+                return Ok(());
+            }
+        }
+        StatusAction::Watch => {
+            if let Some(id) = run_id {
+                let req = format!(
+                    "monitor github actions workflow run using: gh run watch {} --exit-status. \
+                     Report the current status, then provide a final summary when the run completes. \
+                     Use emoji for status: \u{2705} success, \u{274c} failure, \u{1f7e1} in_progress",
+                    id
+                );
+                (req, "Watching Workflow Run".to_string())
+            } else {
+                ctx.say("error: run_id is required for watch action")
+                    .await?;
+                return Ok(());
+            }
+        }
     };
 
-    ctx.say("checking ci status...").await?;
+    // send status-themed embed
+    let embed = serenity::CreateEmbed::default()
+        .title(embed_title)
+        .description(format!(
+            "Processing: {}",
+            request.chars().take(200).collect::<String>()
+        ))
+        .color(0x2F3136) // neutral dark for pending
+        .timestamp(serenity::Timestamp::now());
+
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
 
     let inbound_msg = InboundMessage::new("discord", &sender_id, &chat_id, &request);
     if let Err(e) = ctx.data().bus.publish_inbound(inbound_msg).await {
         error!("failed to publish status command to bus: {}", e);
-        ctx.say(format!("error: failed to check ci status: {}", e))
+
+        let error_embed = serenity::CreateEmbed::default()
+            .title("Error")
+            .description(format!("Failed to process CI/CD status request: {}", e))
+            .color(0xED4245) // Discord red
+            .timestamp(serenity::Timestamp::now());
+
+        ctx.send(poise::CreateReply::default().embed(error_embed))
             .await?;
     }
 
@@ -1202,12 +1315,85 @@ fn match_command_keywords(content: &str) -> CommandIntent {
     }
 
     // ci status patterns
-    if lower.contains("ci status") || lower.contains("status") || lower.contains("ci") {
-        let workflow = extract_after_keywords(&lower, &["status", "ci status"]);
+    if lower.contains("ci")
+        || lower.contains("workflow")
+        || lower.contains("run list")
+        || lower.contains("run view")
+        || lower.contains("checks")
+        || (lower.contains("status")
+            && (lower.contains("run")
+                || lower.contains("check")
+                || lower.contains("ci")
+                || lower.contains("workflow")
+                || lower.contains("pr")))
+    {
+        // /status run list
+        if lower.contains("run list")
+            || lower.contains("list run")
+            || lower.contains("list workflow")
+            || lower.contains("workflow list")
+        {
+            let workflow = extract_after_keywords(
+                &lower,
+                &["run list", "list run", "workflow list", "list workflow"],
+            );
+            let mut req = "list recent github actions workflow runs using: gh run list --limit 10"
+                .to_string();
+            if !workflow.is_empty() {
+                req.push_str(&format!(" --workflow {}", workflow));
+            }
+            req.push_str(
+                ". Format the output as a table showing STATUS, TITLE, WORKFLOW, BRANCH, RUN_ID",
+            );
+            return CommandIntent::Status(req);
+        }
+        // /status run view <id>
+        if lower.contains("run view") || lower.contains("view run") {
+            if let Some(num) = extract_number(&lower) {
+                return CommandIntent::Status(format!(
+                    "view github actions workflow run details using: gh run view {}. Show status, jobs, and timing",
+                    num
+                ));
+            }
+            let id = extract_after_keywords(&lower, &["run view", "view run"]);
+            if !id.is_empty() {
+                return CommandIntent::Status(format!(
+                    "view github actions workflow run details using: gh run view {}. Show status, jobs, and timing",
+                    id
+                ));
+            }
+        }
+        // /status checks <pr>
+        if lower.contains("check") || lower.contains("pr check") {
+            if let Some(num) = extract_number(&lower) {
+                return CommandIntent::Status(format!(
+                    "view ci check status for pull request using: gh pr checks {}. Show each check name, status, and URL",
+                    num
+                ));
+            }
+        }
+        // /status watch <id>
+        if lower.contains("watch") {
+            if let Some(num) = extract_number(&lower) {
+                return CommandIntent::Status(format!(
+                    "monitor github actions workflow run using: gh run watch {} --exit-status. Report status updates",
+                    num
+                ));
+            }
+            let id = extract_after_keywords(&lower, &["watch run", "run watch", "watch"]);
+            if !id.is_empty() {
+                return CommandIntent::Status(format!(
+                    "monitor github actions workflow run using: gh run watch {} --exit-status. Report status updates",
+                    id
+                ));
+            }
+        }
+        // fallback: generic ci status
+        let workflow = extract_after_keywords(&lower, &["ci status", "status"]);
         if !workflow.is_empty() {
             return CommandIntent::Status(format!("check ci status for workflow: {}", workflow));
         }
-        return CommandIntent::Status("check overall ci status".to_string());
+        return CommandIntent::Status("list recent github actions workflow runs using: gh run list --limit 10. Format as a table showing STATUS, TITLE, WORKFLOW, BRANCH, RUN_ID".to_string());
     }
 
     // release patterns
@@ -1405,6 +1591,87 @@ mod tests {
     #[test]
     fn test_extract_number_from_standalone() {
         assert_eq!(extract_number("view pr 42 please"), Some(42));
+    }
+
+    #[test]
+    fn test_match_status_run_list() {
+        let intent = match_command_keywords("show ci run list");
+        match intent {
+            CommandIntent::Status(s) => {
+                assert!(s.contains("gh run list"), "expected gh run list in: {}", s);
+            }
+            _ => panic!("expected status intent for 'show ci run list'"),
+        }
+    }
+
+    #[test]
+    fn test_match_status_run_view() {
+        let intent = match_command_keywords("ci run view 12345");
+        match intent {
+            CommandIntent::Status(s) => {
+                assert!(
+                    s.contains("gh run view 12345"),
+                    "expected gh run view 12345 in: {}",
+                    s
+                );
+            }
+            _ => panic!("expected status intent for 'ci run view 12345'"),
+        }
+    }
+
+    #[test]
+    fn test_match_status_checks_pr() {
+        let intent = match_command_keywords("ci checks for pr #42");
+        match intent {
+            CommandIntent::Status(s) => {
+                assert!(
+                    s.contains("gh pr checks 42"),
+                    "expected gh pr checks 42 in: {}",
+                    s
+                );
+            }
+            _ => panic!("expected status intent for 'ci checks for pr #42'"),
+        }
+    }
+
+    #[test]
+    fn test_match_status_watch() {
+        let intent = match_command_keywords("ci watch run 99999");
+        match intent {
+            CommandIntent::Status(s) => {
+                assert!(
+                    s.contains("gh run watch 99999"),
+                    "expected gh run watch 99999 in: {}",
+                    s
+                );
+            }
+            _ => panic!("expected status intent for 'ci watch run 99999'"),
+        }
+    }
+
+    #[test]
+    fn test_match_status_run_list_with_workflow() {
+        let intent = match_command_keywords("run list ci.yml");
+        match intent {
+            CommandIntent::Status(s) => {
+                assert!(s.contains("gh run list"), "expected gh run list in: {}", s);
+                assert!(
+                    s.contains("ci.yml"),
+                    "expected workflow filter ci.yml in: {}",
+                    s
+                );
+            }
+            _ => panic!("expected status intent for 'run list ci.yml'"),
+        }
+    }
+
+    #[test]
+    fn test_match_status_fallback() {
+        let intent = match_command_keywords("show ci status");
+        match intent {
+            CommandIntent::Status(_) => {}
+            _ => panic!("expected status intent for 'show ci status'"),
+        }
     }
 }
 
@@ -1718,7 +1985,7 @@ async fn help(
                 "**PR Management**\n`/pr create <title> [base] [head]` - create new pr (member)\n`/pr list [state]` - list prs (guest)\n`/pr view <number>` - view pr details (guest)\n`/pr merge <number>` - merge pr (admin only, checks CI)\n`/pr comment <number> <body>` - comment on pr (member)\n`/pr review <number> <approve|reject>` - code review (member)\n`/pr close <number>` - close pr (member)"
             }
             "status" => {
-                "**CI Status**\n`/status [workflow]` - check ci status for workflow or overall"
+                "**CI/CD Status View**\n`/status action:RunList [workflow] [limit]` - list recent workflow runs\n`/status action:RunView run_id:<id>` - view run details & failed logs\n`/status action:Checks pr_number:<id>` - view PR CI check status\n`/status action:Watch run_id:<id>` - real-time run monitoring\n\nExamples:\n`/status action:RunList` - list last 10 runs\n`/status action:RunList workflow:ci.yml limit:20`\n`/status action:RunView run_id:12345`\n`/status action:Checks pr_number:42`\n`/status action:Watch run_id:12345`"
             }
             "release" => {
                 "**Release Management**\n`/release [version] create` - create release (admin only)\n`/release [version]` - view release\n`/release` - list all releases"
@@ -1750,7 +2017,7 @@ async fn help(
         let help_text = r#"**Help**
 
 **GitHub:**
-`/issue` | `/pr` | `/status` | `/release`
+`/issue` | `/pr` | `/status` (CI/CD) | `/release`
 
 **Tools:**
 `/summarize` | `/weather` | `/tmux` | `/skill`
@@ -1802,6 +2069,7 @@ impl Channel for DiscordChannel {
         let http_ref_setup = http_ref.clone();
         let bus_message = bus.clone();
         let config_message = config.clone();
+        let rbac_manager_setup = self.rbac_manager.clone();
 
         let intents = serenity::GatewayIntents::non_privileged()
             | serenity::GatewayIntents::MESSAGE_CONTENT
@@ -1811,6 +2079,7 @@ impl Channel for DiscordChannel {
         struct MessageHandler {
             bus: MessageBus,
             config: DiscordConfig,
+            rbac_manager: Option<Arc<RbacManager>>,
         }
 
         #[serenity::async_trait]
@@ -1856,14 +2125,14 @@ impl Channel for DiscordChannel {
                     Vec::new()
                 };
 
-                let channel = DiscordChannel::new(self.config.clone(), self.bus.clone()).unwrap_or(
+                let channel = DiscordChannel::with_rbac(self.config.clone(), self.bus.clone(), self.rbac_manager.clone()).unwrap_or(
                     DiscordChannel {
                         config: self.config.clone(),
                         bus: self.bus.clone(),
                         running: Arc::new(RwLock::new(true)),
                         http: Arc::new(RwLock::new(None)),
                         permissions: PermissionManager::from_discord_config(&self.config),
-                        rbac_manager: None,
+                        rbac_manager: self.rbac_manager.clone(),
                     },
                 );
 
@@ -2055,6 +2324,7 @@ impl Channel for DiscordChannel {
                 let http_ref = http_ref_setup.clone();
                 let bus = bus_clone.clone();
                 let config = config_clone.clone();
+                let rbac_manager = rbac_manager_setup.clone();
                 Box::pin(async move {
                     info!("discord bot connected as {}", _ready.user.name);
                     *http_ref.write().await = Some(ctx.http.clone());
@@ -2090,7 +2360,7 @@ impl Channel for DiscordChannel {
                         }
                     }
 
-                    Ok(Data { bus, config })
+                    Ok(Data { bus, config, rbac_manager })
                 })
             })
             .build();
@@ -2098,6 +2368,7 @@ impl Channel for DiscordChannel {
         let message_handler = MessageHandler {
             bus: bus_message.clone(),
             config: config_message.clone(),
+            rbac_manager: self.rbac_manager.clone(),
         };
 
         let mut client = serenity::ClientBuilder::new(&config.token, intents)

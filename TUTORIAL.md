@@ -465,6 +465,11 @@ The agent's permissions are determined by your RBAC configuration: the global de
 ### 🛡️ Shell Command Sandbox (Command Whitelisting)
 When RBAC is enabled and a `shell.safe_commands` operation is configured, the AI may only run commands that match the configured whitelist; non-whitelisted commands (including dangerous ones like `rm -rf /` or `sudo`) are blocked. If RBAC is enabled but `shell.safe_commands` is not configured, commands are currently allowed by default, and when RBAC is disabled a legacy `is_dangerous_command` check is used instead. You can configure exact commands or patterns using the `safe_commands` whitelist.
 
+### 🛡️ Filesystem Sandbox (Path Whitelisting)
+When RBAC filesystem permissions are configured, mofaclaw can restrict which paths the AI may read or write.
+In that case, for all roles (including `superadmin`), access is allowed only for paths matching the role's configured `path_whitelist`; if no such permissions are defined, filesystem access is not restricted by RBAC.
+
+Example configuration in `config.json`:
 ```json
 "rbac": {
   "enabled": true,
@@ -485,6 +490,26 @@ When RBAC is enabled and a `shell.safe_commands` operation is configured, the AI
   }
 }
 ```
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+*Variables like `${workspace}` and `${home}` are automatically resolved.*
 
 ---
 

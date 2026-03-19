@@ -465,6 +465,10 @@ mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以
 ### 🛡️ Shell 命令沙箱 (命令白名单)
 当启用 RBAC 且配置了 `shell.safe_commands` 操作时，AI 只允许执行匹配白名单的命令；未列入白名单的命令（包括类似 `rm -rf /` 或 `sudo` 的危险命令）将被阻止。如果在启用 RBAC 的情况下未配置 `shell.safe_commands`，则默认允许命令执行；而当禁用 RBAC 时，系统将使用旧版的 `is_dangerous_command` 进行检查。您可以使用 `safe_commands` 白名单来配置精确的允许命令或模式。
 
+### 🛡️ 文件系统沙箱 (路径白名单)
+当配置文件系统权限时，mofaclaw 会限制 AI 可以读写哪些路径。在这种情况下，所有角色（包括 SuperAdmin）都只允许访问与其角色匹配的 `path_whitelist`（路径白名单）中的路径；如果未配置相关权限，则文件系统访问不受 RBAC 限制。若希望 SuperAdmin 在文件系统上拥有几乎无限制的访问能力，应在相应权限项下为 `superadmin` 配置足够宽泛的路径模式（例如 `"${workspace}/**"`、`"${home}/**"` 等），而不是假定其会自动绕过沙箱。
+
+`config.json` 中的配置示例：
 ```json
 "rbac": {
   "enabled": true,
@@ -485,6 +489,26 @@ mofaclaw 包含一个强大的基于角色的访问控制 (RBAC) 系统，可以
   }
 }
 ```
+      "filesystem": {
+        "read": {
+          "min_role": "guest",
+          "path_whitelist": {
+            "guest": ["${workspace}/**"],
+            "member": ["${workspace}/**", "${home}/projects/**"]
+          }
+        },
+        "write": {
+          "min_role": "member",
+          "path_whitelist": {
+            "member": ["${workspace}/**"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+*类似 `${workspace}` 和 `${home}` 的变量会被自动解析。*
 
 ---
 

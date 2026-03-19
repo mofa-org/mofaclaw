@@ -6,9 +6,11 @@ This directory contains the builtin skills for mofaclaw. These skills are automa
 
 - **weather** - Get current weather and forecasts using wttr.in (no API key required)
 - **github** - Interact with GitHub using the `gh` CLI
+- **pr-review** - Review pull requests with structured checks for scope, security, tests, CI, and reviewer comments
 - **summarize** - Summarize or extract text/transcripts from URLs, podcasts, and local files
 - **tmux** - Remote-control tmux sessions for interactive CLIs
 - **skill-creator** - Meta-skill for creating new skills
+- **repo-report** - Generate comprehensive repository analytics reports for managers
 
 ## Skill Structure
 

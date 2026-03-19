@@ -848,7 +848,8 @@ impl Channel for FeishuChannel {
 
                                                 // Attach RBAC role to metadata when available
                                                 if let Some(ref rbac_mgr) = rbac {
-                                                    let role: Role = rbac_mgr.get_role_from_feishu(sender, &[]);
+                                                    let empty_tags: Vec<String> = Vec::new();
+                                                    let role: Role = rbac_mgr.get_role_from_feishu(sender, &empty_tags);
                                                     metadata.insert("role".to_string(), Value::String(role.as_str().to_string()));
                                                 }
 

@@ -69,6 +69,10 @@ pub struct AgentLoop {
     temperature: Option<f32>,
     /// Max tokens
     max_tokens: Option<u32>,
+    /// Resource Limiter
+    resource_limiter: Option<Arc<crate::sandbox::resource::ResourceLimiter>>,
+    /// RBAC Manager
+    rbac_manager: Option<Arc<crate::rbac::manager::RbacManager>>,
 }
 
 impl AgentLoop {
@@ -99,6 +103,30 @@ impl AgentLoop {
         // Create mofa TaskOrchestrator for subagent spawning
         let task_orchestrator = Arc::new(TaskOrchestrator::with_defaults(provider.clone()));
 
+        let resource_limiter = config
+            .sandbox
+            .as_ref()
+            .and_then(|s| s.build_limiter())
+            .map(Arc::new);
+
+        let rbac_manager = match config.get_rbac_config() {
+            Ok(Some(rc)) => {
+                let home_dir = dirs::home_dir()
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(crate::rbac::manager::RbacManager::new(
+                    rc,
+                    config.workspace_path(),
+                    home_dir,
+                )))
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!("RBAC configuration error: {}", e);
+                None
+            }
+        };
+
         Ok(Self {
             _agent: agent,
             provider,
@@ -112,6 +140,8 @@ impl AgentLoop {
             default_model,
             temperature,
             max_tokens,
+            resource_limiter,
+            rbac_manager,
         })
     }
 
@@ -136,6 +166,30 @@ impl AgentLoop {
         // Create mofa TaskOrchestrator for subagent spawning
         let task_orchestrator = Arc::new(TaskOrchestrator::with_defaults(provider.clone()));
 
+        let resource_limiter = config
+            .sandbox
+            .as_ref()
+            .and_then(|s| s.build_limiter())
+            .map(Arc::new);
+
+        let rbac_manager = match config.get_rbac_config() {
+            Ok(Some(rc)) => {
+                let home_dir = dirs::home_dir()
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(crate::rbac::manager::RbacManager::new(
+                    rc,
+                    config.workspace_path(),
+                    home_dir,
+                )))
+            }
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!("RBAC configuration error: {}", e);
+                None
+            }
+        };
+
         Ok(Self {
             _agent: agent,
             provider,
@@ -149,6 +203,8 @@ impl AgentLoop {
             default_model,
             temperature,
             max_tokens,
+            resource_limiter,
+            rbac_manager,
         })
     }
 
@@ -269,8 +325,37 @@ impl AgentLoop {
         } else {
             Some(msg.media.clone())
         };
+        // Determine user
+        let role = self.rbac_manager.as_ref().map(|manager| {
+            // Simplified role determination for agent loop: default to guest if not Discord/DingTalk/Feishu
+            // Real channels will pass correct roles later, but we need *some* role here matching the channel.
+            // Since AgentLoop only has channel/user_id, it can't check Discord roles directly.
+            // So we rely on mapping default rules or overrides.
+            let roles_val = msg.metadata.get("roles");
+            let roles: Vec<String> = if let Some(serde_json::Value::Array(arr)) = roles_val {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            match response_channel.as_str() {
+                "discord" => manager.get_role_from_discord(&msg.sender_id, &roles),
+                "dingtalk" => manager.get_role_from_dingtalk(&msg.sender_id, &roles),
+                "feishu" => manager.get_role_from_feishu(&msg.sender_id, &roles),
+                _ => crate::rbac::Role::Guest,
+            }
+        });
+
         let final_content = self
-            .run_agent_loop(context_messages, &msg.content, media)
+            .run_agent_loop(
+                context_messages,
+                &msg.content,
+                media,
+                msg.sender_id.clone(),
+                role,
+            )
             .await?;
 
         // Save to session
@@ -306,9 +391,15 @@ impl AgentLoop {
         context: Vec<ChatMessage>,
         content: &str,
         media: Option<Vec<String>>,
+        user_id: String,
+        role: Option<crate::rbac::Role>,
     ) -> Result<Option<String>> {
-        let tool_executor = Arc::new(ToolRegistryExecutor::new(self.tools.clone()))
-            as Arc<dyn mofa_sdk::llm::ToolExecutor>;
+        let tool_executor = Arc::new(ToolRegistryExecutor::new(
+            self.tools.clone(),
+            user_id,
+            self.resource_limiter.clone(),
+            role,
+        )) as Arc<dyn mofa_sdk::llm::ToolExecutor>;
 
         let config = MofaAgentLoopConfig {
             max_tool_iterations: self.max_iterations,

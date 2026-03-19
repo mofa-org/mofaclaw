@@ -339,12 +339,11 @@ impl AgentLoop {
             } else {
                 Vec::new()
             };
-            let roles_ref: Vec<&str> = roles.iter().map(|s| s.as_str()).collect();
 
             match response_channel.as_str() {
-                "discord" => manager.get_role_from_discord(&msg.sender_id, &roles_ref),
-                "dingtalk" => manager.get_role_from_dingtalk(&msg.sender_id, &roles_ref),
-                "feishu" => manager.get_role_from_feishu(&msg.sender_id, &roles_ref),
+                "discord" => manager.get_role_from_discord(&msg.sender_id, &roles),
+                "dingtalk" => manager.get_role_from_dingtalk(&msg.sender_id, &roles),
+                "feishu" => manager.get_role_from_feishu(&msg.sender_id, &roles),
                 _ => crate::rbac::Role::Guest,
             }
         });

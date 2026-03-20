@@ -56,7 +56,10 @@ impl RbacManager {
         let parts: Vec<&str> = resource.split('.').collect();
         if parts.len() < 2 {
             warn!("Invalid resource format: {}", resource);
-            return PermissionResult::Allowed; // Default to allow if format is invalid
+            return PermissionResult::Denied(format!(
+                "Invalid RBAC resource format '{}'; expected '<category>.<name>'",
+                resource
+            ));
         }
 
         let category = parts[0];
@@ -67,7 +70,7 @@ impl RbacManager {
             "tools" => self.check_tool_permission(user_role, name, operation),
             _ => {
                 warn!("Unknown permission category: {}", category);
-                PermissionResult::Allowed // Default to allow
+                PermissionResult::Denied(format!("Unknown RBAC permission category '{}'", category))
             }
         }
     }
@@ -108,7 +111,10 @@ impl RbacManager {
                     "Invalid min_role '{}' for skill.{}.{}",
                     op_perm.min_role, skill_name, operation
                 );
-                return PermissionResult::Allowed;
+                return PermissionResult::Denied(format!(
+                    "Invalid RBAC min_role '{}' for skill.{}.{}",
+                    op_perm.min_role, skill_name, operation
+                ));
             }
         };
 
@@ -161,7 +167,10 @@ impl RbacManager {
                     "Invalid min_role '{}' for tool.{}.{}",
                     op_perm.min_role, tool_name, operation
                 );
-                return PermissionResult::Allowed;
+                return PermissionResult::Denied(format!(
+                    "Invalid RBAC min_role '{}' for tool.{}.{}",
+                    op_perm.min_role, tool_name, operation
+                ));
             }
         };
 
@@ -248,7 +257,12 @@ impl RbacManager {
         if let Some(op_perm) = tool_config.operations.get("full_access") {
             let min_role = match Role::from_str(&op_perm.min_role) {
                 Some(role) => role,
-                None => return PermissionResult::Allowed,
+                None => {
+                    return PermissionResult::Denied(format!(
+                        "Invalid RBAC min_role '{}' for tool.shell.full_access",
+                        op_perm.min_role
+                    ));
+                }
             };
             if role >= min_role {
                 return PermissionResult::Allowed;

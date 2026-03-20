@@ -41,5 +41,7 @@ pub use session::{
     Session, SessionExt, SessionInfo, SessionManager, messages_to_session_messages,
     session_messages_to_messages,
 };
-pub use tools::ToolRegistry;
+pub use tools::{
+    default_tool_permissions, PermissionAwareRegistry, ToolPermissionRequirement, ToolRegistry,
+};
 pub use types::*;

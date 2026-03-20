@@ -73,6 +73,9 @@ pub enum ToolError {
     #[error("Tool timeout after {0}s")]
     Timeout(u64),
 
+    #[error("Permission denied: {0}")]
+    PermissionDenied(String),
+
     #[error("File error: {0}")]
     File(String),
 

@@ -9,11 +9,14 @@ use crate::agent::SubagentManager;
 use crate::bus::MessageBus;
 use crate::error::Result;
 use crate::messages::{InboundMessage, OutboundMessage};
+use crate::rbac::{AuditLogger, RbacManager, Role};
 use crate::session::{SessionExt, SessionManager};
 use crate::tools::filesystem::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 use crate::tools::shell::ExecTool;
 use crate::tools::web::{WebFetchTool, WebSearchTool};
-use crate::tools::{MessageTool, SpawnTool, ToolRegistry, ToolRegistryExecutor};
+use crate::tools::{
+    MessageTool, PermissionAwareRegistry, SpawnTool, ToolRegistry, ToolRegistryExecutor,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info};
@@ -33,6 +36,12 @@ pub struct ActiveSubagent {
     pub origin_channel: String,
     pub origin_chat_id: String,
     pub started_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct ToolCaller {
+    user_id: String,
+    role: Role,
 }
 
 /// The agent loop is the core processing engine
@@ -69,6 +78,10 @@ pub struct AgentLoop {
     temperature: Option<f32>,
     /// Max tokens
     max_tokens: Option<u32>,
+    /// RBAC manager for permission-based tool execution
+    rbac_manager: Option<Arc<RbacManager>>,
+    /// Audit logger for permission checks
+    audit_logger: Option<Arc<AuditLogger>>,
 }
 
 impl AgentLoop {
@@ -112,6 +125,8 @@ impl AgentLoop {
             default_model,
             temperature,
             max_tokens,
+            rbac_manager: None,
+            audit_logger: None,
         })
     }
 
@@ -149,7 +164,22 @@ impl AgentLoop {
             default_model,
             temperature,
             max_tokens,
+            rbac_manager: None,
+            audit_logger: None,
         })
+    }
+
+    /// Set the RBAC manager and audit logger for permission-based tool execution.
+    ///
+    /// When set, tool executions are checked against RBAC policies before
+    /// being forwarded to the underlying tool registry.
+    pub fn set_rbac(
+        &mut self,
+        rbac_manager: Arc<RbacManager>,
+        audit_logger: Option<Arc<AuditLogger>>,
+    ) {
+        self.rbac_manager = Some(rbac_manager);
+        self.audit_logger = audit_logger;
     }
 
     /// Register the default set of tools (without spawn tool)
@@ -269,8 +299,9 @@ impl AgentLoop {
         } else {
             Some(msg.media.clone())
         };
+        let tool_caller = self.resolve_tool_caller(&msg);
         let final_content = self
-            .run_agent_loop(context_messages, &msg.content, media)
+            .run_agent_loop(context_messages, &msg.content, media, tool_caller)
             .await?;
 
         // Save to session
@@ -300,15 +331,85 @@ impl AgentLoop {
             .map(|content| OutboundMessage::new(&response_channel, &response_chat_id, content)))
     }
 
-    /// Run the main agent loop using mofa framework's built-in AgentLoop
+    fn resolve_tool_caller(&self, msg: &InboundMessage) -> ToolCaller {
+        let user_id = Self::normalized_sender_id(&msg.sender_id);
+        let role = self
+            .role_from_metadata(msg)
+            .or_else(|| self.role_from_rbac_channel_mapping(msg, &user_id))
+            .unwrap_or(Role::Guest);
+
+        ToolCaller { user_id, role }
+    }
+
+    fn normalized_sender_id(sender_id: &str) -> String {
+        sender_id
+            .split_once('|')
+            .map(|(user_id, _)| user_id.to_string())
+            .unwrap_or_else(|| sender_id.to_string())
+    }
+
+    fn role_from_metadata(&self, msg: &InboundMessage) -> Option<Role> {
+        msg.metadata
+            .get("role")
+            .and_then(|value| value.as_str())
+            .and_then(Role::from_str)
+    }
+
+    fn role_from_rbac_channel_mapping(&self, msg: &InboundMessage, user_id: &str) -> Option<Role> {
+        let rbac = self.rbac_manager.as_ref()?;
+
+        let role = match msg.channel.as_str() {
+            "discord" => rbac
+                .get_role_from_discord(user_id, &Self::metadata_string_list(msg, "discord_roles")),
+            "dingtalk" => rbac
+                .get_role_from_dingtalk(user_id, &Self::metadata_string_list(msg, "dingtalk_tags")),
+            "feishu" => {
+                rbac.get_role_from_feishu(user_id, &Self::metadata_string_list(msg, "feishu_tags"))
+            }
+            _ => return None,
+        };
+
+        Some(role)
+    }
+
+    fn metadata_string_list(msg: &InboundMessage, key: &str) -> Vec<String> {
+        msg.metadata
+            .get(key)
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(|value| value.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Run the main agent loop using mofa framework's built-in AgentLoop.
+    ///
+    /// When an `RbacManager` has been set via `set_rbac`, tool calls are
+    /// routed through a `PermissionAwareRegistry` that enforces RBAC
+    /// policies before execution.  Otherwise the raw `ToolRegistryExecutor`
+    /// is used (backwards-compatible).
     async fn run_agent_loop(
         &self,
         context: Vec<ChatMessage>,
         content: &str,
         media: Option<Vec<String>>,
+        tool_caller: ToolCaller,
     ) -> Result<Option<String>> {
-        let tool_executor = Arc::new(ToolRegistryExecutor::new(self.tools.clone()))
-            as Arc<dyn mofa_sdk::llm::ToolExecutor>;
+        let tool_executor: Arc<dyn mofa_sdk::llm::ToolExecutor> =
+            if let Some(ref rbac) = self.rbac_manager {
+                Arc::new(PermissionAwareRegistry::new(
+                    self.tools.clone(),
+                    Some(rbac.clone()),
+                    self.audit_logger.clone(),
+                    tool_caller.role,
+                    tool_caller.user_id.clone(),
+                ))
+            } else {
+                Arc::new(ToolRegistryExecutor::new(self.tools.clone()))
+            };
 
         let config = MofaAgentLoopConfig {
             max_tool_iterations: self.max_iterations,

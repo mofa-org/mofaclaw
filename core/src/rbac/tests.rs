@@ -694,6 +694,56 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_resource_format_is_denied() {
+        let manager = create_test_manager();
+
+        match manager.check_permission(Role::Guest, "github", "repo.view") {
+            PermissionResult::Denied(reason) => {
+                assert!(reason.contains("Invalid RBAC resource format"));
+            }
+            _ => panic!("Expected denied for invalid resource format"),
+        }
+    }
+
+    #[test]
+    fn test_unknown_permission_category_is_denied() {
+        let manager = create_test_manager();
+
+        match manager.check_permission(Role::Guest, "unknown.github", "repo.view") {
+            PermissionResult::Denied(reason) => {
+                assert!(reason.contains("Unknown RBAC permission category"));
+            }
+            _ => panic!("Expected denied for unknown permission category"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_tool_min_role_is_denied_at_runtime() {
+        let mut config = create_test_rbac_config();
+        config
+            .permissions
+            .tools
+            .get_mut("filesystem")
+            .unwrap()
+            .operations
+            .get_mut("read")
+            .unwrap()
+            .min_role = "invalid_role".to_string();
+        let manager = RbacManager::new(
+            config,
+            PathBuf::from("/workspace"),
+            PathBuf::from("/home/test"),
+        );
+
+        match manager.check_permission(Role::Guest, "tools.filesystem", "read") {
+            PermissionResult::Denied(reason) => {
+                assert!(reason.contains("Invalid RBAC min_role"));
+            }
+            _ => panic!("Expected denied for invalid tool min_role"),
+        }
+    }
+
+    #[test]
     fn test_integration_github_workflow() {
         let manager = create_test_manager();
 

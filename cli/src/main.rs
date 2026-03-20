@@ -31,6 +31,17 @@ const MOFA_LOGO: &str = r#"
  |_|  |_|\___/|_|/_/    \_\
 "#;
 
+fn load_rbac_manager(config: &Config) -> Option<Arc<RbacManager>> {
+    match config.get_rbac_config() {
+        Ok(Some(rbac_config)) if rbac_config.enabled => {
+            let workspace = config.workspace_path();
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+        }
+        _ => None,
+    }
+}
+
 /// Mofaclaw - Personal AI Assistant
 #[derive(Parser, Debug)]
 #[command(name = "mofaclaw")]
@@ -327,18 +338,22 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
             .await,
     );
 
+    let rbac_manager = load_rbac_manager(&config);
+
     // Create AgentLoop with the pre-built agent AND tools
-    let agent = Arc::new(
-        AgentLoop::with_agent_and_tools(
-            &config,
-            llm_agent,
-            mofa_provider,
-            bus.clone(),
-            sessions.clone(),
-            tools.clone(),
-        )
-        .await?,
-    );
+    let mut agent = AgentLoop::with_agent_and_tools(
+        &config,
+        llm_agent,
+        mofa_provider,
+        bus.clone(),
+        sessions.clone(),
+        tools.clone(),
+    )
+    .await?;
+    if let Some(ref rbac) = rbac_manager {
+        agent.set_rbac(rbac.clone(), None);
+    }
+    let agent = Arc::new(agent);
 
     // Create subagent manager from agent loop
     let subagent_manager = std::sync::Arc::new(SubagentManager::new(agent.clone()));
@@ -348,19 +363,6 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
 
     // create channel manager
     let channel_manager = ChannelManager::new(&config, bus.clone());
-
-    // Initialize RBAC manager if configured (must be before channel registrations)
-    let rbac_manager: Option<Arc<RbacManager>> = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
-        if rbac_config.enabled {
-            let workspace = config.workspace_path();
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
 
     // register dingtalk channel if enabled
     if config.channels.dingtalk.enabled {
@@ -393,20 +395,6 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
         channel_manager.register_channel(Arc::new(feishu)).await;
         println!("Feishu: enabled (via Python bridge on ws://localhost:3004)");
     }
-
-    // Initialize RBAC manager if configured
-    let rbac_manager: Option<Arc<RbacManager>> =
-        if let Ok(Some(rbac_config)) = config.get_rbac_config() {
-            if rbac_config.enabled {
-                let workspace = config.workspace_path();
-                let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-                Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
 
     // register discord channel if enabled
     if config.channels.discord.enabled {
@@ -512,6 +500,8 @@ async fn command_agent(message: Option<String>, session: String) -> Result<()> {
         AgentLoop::register_default_tools(&mut tools_guard, &workspace, brave_api_key, bus.clone());
     }
 
+    let rbac_manager = load_rbac_manager(&config);
+
     // Create ToolRegistryExecutor for LLMAgentBuilder
     let tool_executor = Arc::new(ToolRegistryExecutor::new(tools.clone()));
 
@@ -533,17 +523,19 @@ async fn command_agent(message: Option<String>, session: String) -> Result<()> {
     );
 
     // Create AgentLoop with the pre-built agent AND tools
-    let agent = Arc::new(
-        AgentLoop::with_agent_and_tools(
-            &config,
-            llm_agent,
-            mofa_provider,
-            bus.clone(),
-            sessions.clone(),
-            tools.clone(),
-        )
-        .await?,
-    );
+    let mut agent = AgentLoop::with_agent_and_tools(
+        &config,
+        llm_agent,
+        mofa_provider,
+        bus.clone(),
+        sessions.clone(),
+        tools.clone(),
+    )
+    .await?;
+    if let Some(ref rbac) = rbac_manager {
+        agent.set_rbac(rbac.clone(), None);
+    }
+    let agent = Arc::new(agent);
 
     // Create subagent manager from agent loop
     let subagent_manager = Arc::new(SubagentManager::new(agent.clone()));

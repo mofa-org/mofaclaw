@@ -189,6 +189,14 @@ impl AgentLoop {
         tools_guard.register(spawn_tool);
     }
 
+    /// Register team tools with the skills manager
+    pub async fn register_team_tools(&self, team_manager: Arc<crate::team::TeamManager>) {
+        let mut tools_guard = self.tools.write().await;
+        let skill = Arc::new(crate::skills::MultiAgentSkill::new(team_manager));
+        let summon_tool = crate::tools::team_tools::SummonTeamTool::new(skill);
+        tools_guard.register(summon_tool);
+    }
+
     /// Run the agent loop, processing messages from the bus
     pub async fn run(&self) -> Result<()> {
         *self.running.write().await = true;

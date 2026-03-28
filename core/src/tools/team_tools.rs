@@ -1,10 +1,10 @@
 //! Multi-Agent Tools to be registered in the ToolRegistry
 
-use crate::error::Result;
 use crate::skills::MultiAgentSkill;
-use crate::tools::base::{Tool, ToolEnv, ToolParam};
+use crate::tools::base::{SimpleTool, ToolInput, ToolResult};
 use async_trait::async_trait;
-use serde_json::Value;
+use mofa_sdk::agent::ToolCategory;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tracing::info;
 
@@ -19,7 +19,7 @@ impl SummonTeamTool {
 }
 
 #[async_trait]
-impl Tool for SummonTeamTool {
+impl SimpleTool for SummonTeamTool {
     fn name(&self) -> &str {
         "summon_team"
     }
@@ -28,28 +28,37 @@ impl Tool for SummonTeamTool {
         "Summons a multi-agent team (Architect, Developer, Reviewer) to collaborate on a complex project or feature."
     }
 
-    fn parameters(&self) -> Vec<ToolParam> {
-        vec![
-            ToolParam {
-                name: "task_description".to_string(),
-                description: "The full description of the task to be completed by the team".to_string(),
-                param_type: "string".to_string(),
-                required: true,
-            }
-        ]
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "task_description": {
+                    "type": "string",
+                    "description": "The full description of the task to be completed by the team"
+                }
+            },
+            "required": ["task_description"]
+        })
     }
 
-    async fn execute(
-        &self,
-        args: &std::collections::HashMap<String, Value>,
-        _env: ToolEnv,
-    ) -> Result<String> {
-        let task = match args.get("task_description").and_then(|v| v.as_str()) {
+    async fn execute(&self, input: ToolInput) -> ToolResult {
+        let task = match input.get_str("task_description") {
             Some(t) => t,
-            None => return Err(crate::error::ToolError::InvalidParameters("Missing task_description".to_string()).into()),
+            None => return ToolResult::failure("Missing 'task_description' parameter"),
         };
 
         info!("Summoning team for task: {}", task);
-        self.skill.execute(task, None).await
+        match self.skill.execute(task, None).await {
+            Ok(res) => ToolResult::success_text(res),
+            Err(e) => ToolResult::failure(format!("Error: {}", e)),
+        }
+    }
+
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Agent
+    }
+
+    fn metadata(&self) -> mofa_sdk::kernel::ToolMetadata {
+        mofa_sdk::kernel::ToolMetadata::new().with_category("agent")
     }
 }

@@ -19,15 +19,15 @@ use teloxide::{
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
-static BOLD1_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").unwrap());
-static BOLD2_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"__([^_]+)__").unwrap());
+static BOLD1_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*([^*]+)\*\*").expect("failed to compile BOLD1_RE regex pattern"));
+static BOLD2_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"__([^_]+)__").expect("failed to compile BOLD2_RE regex pattern"));
 // Use word boundaries around _text_ to approximate the original intent
 // without using unsupported look-around in Rust's regex engine.
-static ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\b_([^_]+)_\\b").unwrap());
-static LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap());
-static HEADER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^#{1,6}\s+(.+)$").unwrap());
-static CODEBLOCK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"```([\s\S]*?)```").unwrap());
-static INLINECODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap());
+static ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\b_([^_]+)_\\b").expect("failed to compile ITALIC_RE regex pattern"));
+static LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("failed to compile LINK_RE regex pattern"));
+static HEADER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^#{1,6}\s+(.+)$").expect("failed to compile HEADER_RE regex pattern"));
+static CODEBLOCK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"```([\s\S]*?)```").expect("failed to compile CODEBLOCK_RE regex pattern"));
+static INLINECODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").expect("failed to compile INLINECODE_RE regex pattern"));
 
 /// Telegram channel using teloxide
 pub struct TelegramChannel {

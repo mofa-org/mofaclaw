@@ -170,11 +170,19 @@ impl<'de> Deserialize<'de> for Message {
                         "content" => {
                             let value = map.next_value::<serde_json::Value>()?;
                             content = if value.is_string() {
-                                Some(MessageContent::Text(value.as_str().unwrap().to_string()))
+                                let text = value
+                                    .as_str()
+                                    .ok_or_else(|| serde::de::Error::custom(
+                                        "content must be a valid string",
+                                    ))?
+                                    .to_string();
+                                Some(MessageContent::Text(text))
                             } else if value.is_array() {
-                                Some(MessageContent::Array(
-                                    serde_json::from_value(value).unwrap(),
-                                ))
+                                let array = serde_json::from_value(value)
+                                    .map_err(|e| serde::de::Error::custom(
+                                        format!("failed to deserialize content array: {}", e),
+                                    ))?;
+                                Some(MessageContent::Array(array))
                             } else if value.is_null() {
                                 None
                             } else {

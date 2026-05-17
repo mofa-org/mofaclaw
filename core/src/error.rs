@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use thiserror::Error;
+use uuid::Uuid;
 
 /// Result type for Mofaclaw operations
 pub type Result<T> = std::result::Result<T, MofaclawError>;
@@ -32,6 +33,10 @@ pub enum MofaclawError {
     /// Agent errors
     #[error("Agent error: {0}")]
     Agent(#[from] AgentError),
+
+    /// Workspace errors
+    #[error("Workspace error: {0}")]
+    Workspace(#[from] WorkspaceError),
 
     /// IO errors
     #[error("IO error: {0}")]
@@ -181,6 +186,39 @@ pub enum AgentError {
 
     #[error("Cron error: {0}")]
     Cron(String),
+}
+
+/// Workspace-related errors
+#[derive(Error, Debug)]
+pub enum WorkspaceError {
+    #[error("Artifact not found: {0}")]
+    ArtifactNotFound(Uuid),
+
+    #[error("Artifact {artifact_id} version conflict: expected v{expected}, found v{actual}")]
+    VersionConflict {
+        artifact_id: Uuid,
+        expected: u32,
+        actual: u32,
+    },
+
+    #[error("Artifact {artifact_id} is locked by agent {held_by}")]
+    ArtifactLocked {
+        artifact_id: Uuid,
+        held_by: crate::workspace::types::AgentId,
+    },
+
+    #[error("Lock on artifact {artifact_id} is held by {held_by}, not {requester}")]
+    LockNotOwned {
+        artifact_id: Uuid,
+        held_by: crate::workspace::types::AgentId,
+        requester: crate::workspace::types::AgentId,
+    },
+
+    #[error("Version {1} not found for artifact {0}")]
+    VersionNotFound(Uuid, u32),
+
+    #[error("Workspace resource is busy: {0}")]
+    Busy(String),
 }
 
 impl From<anyhow::Error> for MofaclawError {

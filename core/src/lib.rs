@@ -20,6 +20,7 @@ pub mod rbac;
 pub mod session;
 pub mod tools;
 pub mod types;
+pub mod workspace;
 
 // Re-exports for convenience
 pub use agent::{AgentLoop, ContextBuilder, SubagentManager};
@@ -43,3 +44,4 @@ pub use session::{
 };
 pub use tools::ToolRegistry;
 pub use types::*;
+pub use workspace::SharedWorkspace;

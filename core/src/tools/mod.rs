@@ -9,9 +9,11 @@ pub mod message;
 pub mod registry;
 pub mod shell;
 pub mod spawn;
+pub mod team_tools;
 pub mod web;
 
 pub use base::{ToolDefinition, ToolExecutor};
+pub use team_tools::SummonTeamTool;
 pub use filesystem::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 pub use message::MessageTool;
 pub use registry::{ToolRegistry, ToolRegistryExecutor};

@@ -308,7 +308,12 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     }
 
     // Create ToolRegistryExecutor for LLMAgentBuilder
-    let tool_executor = Arc::new(ToolRegistryExecutor::new(tools.clone()));
+    let tool_executor = Arc::new(ToolRegistryExecutor::new(
+        tools.clone(),
+        "system".to_string(),
+        None,
+        None,
+    ));
 
     // Build system prompt
     let system_prompt = context.build_system_prompt(None).await.unwrap_or_else(|_| {
@@ -350,18 +355,18 @@ async fn command_gateway(port: u16, verbose: bool) -> Result<()> {
     let channel_manager = ChannelManager::new(&config, bus.clone());
 
     // Initialize RBAC manager if configured (must be before channel registrations)
-    let rbac_manager: Option<Arc<RbacManager>> = if let Ok(Some(rbac_config)) = config.get_rbac_config() {
-        if rbac_config.enabled {
-            let workspace = config.workspace_path();
-            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-            Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+    let rbac_manager: Option<Arc<RbacManager>> =
+        if let Ok(Some(rbac_config)) = config.get_rbac_config() {
+            if rbac_config.enabled {
+                let workspace = config.workspace_path();
+                let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                Some(Arc::new(RbacManager::new(rbac_config, workspace, home)))
+            } else {
+                None
+            }
         } else {
             None
-        }
-    } else {
-        None
-    };
-
+        };
     // register dingtalk channel if enabled
     if config.channels.dingtalk.enabled {
         let dingtalk = DingTalkChannel::new(config.channels.dingtalk.clone(), bus.clone());
@@ -513,7 +518,12 @@ async fn command_agent(message: Option<String>, session: String) -> Result<()> {
     }
 
     // Create ToolRegistryExecutor for LLMAgentBuilder
-    let tool_executor = Arc::new(ToolRegistryExecutor::new(tools.clone()));
+    let tool_executor = Arc::new(ToolRegistryExecutor::new(
+        tools.clone(),
+        "system".to_string(),
+        None,
+        None,
+    ));
 
     // Build system prompt
     let system_prompt = context.build_system_prompt(None).await.unwrap_or_else(|_| {

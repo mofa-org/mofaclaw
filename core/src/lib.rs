@@ -17,6 +17,7 @@ pub mod permissions;
 pub mod provider;
 pub mod python_env;
 pub mod rbac;
+pub mod sandbox;
 pub mod session;
 pub mod tools;
 pub mod types;

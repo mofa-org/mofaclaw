@@ -6,6 +6,7 @@
 pub mod base;
 pub mod filesystem;
 pub mod message;
+pub mod permissions;
 pub mod registry;
 pub mod shell;
 pub mod spawn;
@@ -14,6 +15,9 @@ pub mod web;
 pub use base::{ToolDefinition, ToolExecutor};
 pub use filesystem::{EditFileTool, ListDirTool, ReadFileTool, WriteFileTool};
 pub use message::MessageTool;
+pub use permissions::{
+    PermissionAwareRegistry, ToolPermissionRequirement, default_tool_permissions,
+};
 pub use registry::{ToolRegistry, ToolRegistryExecutor};
 pub use shell::ExecTool;
 pub use spawn::{InMemorySubagentManager, SpawnTool, SubagentManager};
